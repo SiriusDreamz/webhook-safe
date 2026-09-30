@@ -1,0 +1,46 @@
+{
+  "name": "webhook-safe",
+  "version": "0.1.0",
+  "description": "Safe, idempotent webhook handling for Node.js and TypeScript",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup && tsc -p tsconfig.build.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": [
+    "webhook",
+    "webhooks",
+    "typescript",
+    "node",
+    "idempotency"
+  ],
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "redis": "^6.3.0",
+    "tsup": "^8.0.0",
+    "typescript": "^5.0.0",
+    "vitest": "^3.0.0"
+  },
+  "peerDependencies": {
+    "redis": "^6.3.0"
+  },
+  "peerDependenciesMeta": {
+    "redis": {
+      "optional": true
+    }
+  }
+}
