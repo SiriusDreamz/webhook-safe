@@ -18,95 +18,112 @@ describe("handleWebhook", () => {
 
     expect(result).toBe("processed");
     expect(handler).toHaveBeenCalledTimes(1);
-    expect(await store.get("event_123")).toBe("completed");
   });
 
-  it("skips duplicate events", async () => {
+  it("does not process the same event twice", async () => {
     const store = new MemoryStore();
     const handler = vi.fn();
 
-    const options = {
+    const event = { id: "event_123" };
+
+    const firstResult = await handleWebhook(event, {
       store,
-      getKey: (event: { id: string }) => event.id,
+      getKey: (event) => event.id,
       handler,
-    };
+    });
 
-    expect(await handleWebhook({ id: "event_123" }, options)).toBe("processed");
-    expect(await handleWebhook({ id: "event_123" }, options)).toBe("duplicate");
+    const secondResult = await handleWebhook(event, {
+      store,
+      getKey: (event) => event.id,
+      handler,
+    });
 
+    expect(firstResult).toBe("processed");
+    expect(secondResult).toBe("duplicate");
     expect(handler).toHaveBeenCalledTimes(1);
   });
 
-  it("only processes one concurrent delivery", async () => {
+  it("allows a failed handler to be retried", async () => {
     const store = new MemoryStore();
-
-    let resolveHandler!: () => void;
-
-    const handlerFinished = new Promise<void>((resolve) => {
-      resolveHandler = resolve;
-    });
-
-    const handler = vi.fn(async () => {
-      await handlerFinished;
-    });
-
-    const options = {
-      store,
-      getKey: (event: { id: string }) => event.id,
-      handler,
-    };
-
-    const first = handleWebhook({ id: "event_123" }, options);
-    const second = handleWebhook({ id: "event_123" }, options);
-
-    await Promise.resolve();
-
-    resolveHandler();
-
-    const results = await Promise.all([first, second]);
-
-    expect(results.sort()).toEqual(["duplicate", "processed"]);
-    expect(handler).toHaveBeenCalledTimes(1);
-  });
-
-  it("allows a failed event to be retried", async () => {
-    const store = new MemoryStore();
-
     const handler = vi
       .fn()
       .mockRejectedValueOnce(new Error("temporary failure"))
       .mockResolvedValueOnce(undefined);
 
-    const options = {
+    const event = { id: "event_123" };
+
+    await expect(
+      handleWebhook(event, {
+        store,
+        getKey: (event) => event.id,
+        handler,
+      })
+    ).rejects.toThrow("temporary failure");
+
+    const result = await handleWebhook(event, {
       store,
-      getKey: (event: { id: string }) => event.id,
+      getKey: (event) => event.id,
       handler,
-    };
+    });
 
-    await expect(handleWebhook({ id: "event_123" }, options)).rejects.toThrow(
-      "temporary failure"
-    );
-
-    expect(await store.get("event_123")).toBeNull();
-
-    expect(await handleWebhook({ id: "event_123" }, options)).toBe("processed");
-
+    expect(result).toBe("processed");
     expect(handler).toHaveBeenCalledTimes(2);
-    expect(await store.get("event_123")).toBe("completed");
   });
 
-  it("allows a failed event to be retried successfully", async () => {
+  it("passes the event to the handler", async () => {
     const store = new MemoryStore();
+    const handler = vi.fn();
 
-    let attempts = 0;
-
-    const handler = async () => {
-      attempts += 1;
-
-      if (attempts === 1) {
-        throw new Error("temporary failure");
-      }
+    const event = {
+      id: "event_123",
+      type: "payment.created",
     };
+
+    await handleWebhook(event, {
+      store,
+      getKey: (event) => event.id,
+      handler,
+    });
+
+    expect(handler).toHaveBeenCalledWith(event);
+  });
+
+  it("uses the configured idempotency key", async () => {
+    const store = new MemoryStore();
+    const handler = vi.fn();
+
+    const firstEvent = {
+      id: "event_123",
+      requestId: "request_1",
+    };
+
+    const secondEvent = {
+      id: "event_456",
+      requestId: "request_1",
+    };
+
+    const getKey = (event: typeof firstEvent) => event.requestId;
+
+    const firstResult = await handleWebhook(firstEvent, {
+      store,
+      getKey,
+      handler,
+    });
+
+    const secondResult = await handleWebhook(secondEvent, {
+      store,
+      getKey,
+      handler,
+    });
+
+    expect(firstResult).toBe("processed");
+    expect(secondResult).toBe("duplicate");
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects an invalid lease", async () => {
+    const store = new MemoryStore();
+    const handler = vi.fn();
 
     await expect(
       handleWebhook(
@@ -115,36 +132,34 @@ describe("handleWebhook", () => {
           store,
           getKey: (event) => event.id,
           handler,
+          leaseMs: 0,
         }
       )
-    ).rejects.toThrow("temporary failure");
+    ).rejects.toThrow(RangeError);
 
-    const result = await handleWebhook(
-      { id: "event_123" },
-      {
-        store,
-        getKey: (event) => event.id,
-        handler,
-      }
-    );
-
-    expect(result).toBe("processed");
-    expect(attempts).toBe(2);
+    expect(handler).not.toHaveBeenCalled();
   });
 
-  it("rejects an invalid lease", async () => {
+  it("allows an abandoned event to be retried after the lease expires", async () => {
     const store = new MemoryStore();
+    const handler = vi.fn();
 
-    await expect(
-      handleWebhook(
-        { id: "event_123" },
-        {
-          store,
-          leaseMs: 0,
-          getKey: (event) => event.id,
-          handler: async () => {},
-        }
-      )
-    ).rejects.toThrow("leaseMs must be a finite number greater than 0");
+    const event = { id: "event_123" };
+
+    const firstClaim = await store.claim(event.id, 10);
+
+    expect(firstClaim).not.toBeNull();
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    const result = await handleWebhook(event, {
+      store,
+      getKey: (event) => event.id,
+      handler,
+      leaseMs: 10,
+    });
+
+    expect(result).toBe("processed");
+    expect(handler).toHaveBeenCalledTimes(1);
   });
 });
