@@ -2,14 +2,14 @@
 
 The easiest inbound webhook idempotency middleware for TypeScript.
 
-`webhook-safe` helps you safely process inbound webhooks exactly once from your application's perspective, while handling duplicate deliveries, concurrent requests, handler failures, and abandoned processing.
+`webhook-safe` helps you safely process inbound webhooks without accidentally processing the same event multiple times.
 
 ## Features
 
 - Redis-backed idempotency
 - Duplicate event protection
 - Atomic event claiming
-- Processing leases
+- Automatically renewed processing leases
 - Retry after handler failure
 - Retry after abandoned processing
 - Ownership-safe completion and release
@@ -37,72 +37,65 @@ import { handleWebhook, MemoryStore, verifyHmacSignature } from "webhook-safe";
 
 const store = new MemoryStore();
 
-const payload = JSON.stringify({
-  id: "evt_123",
-  type: "payment.completed",
+const rawBody = JSON.stringify({
+  id: "event_123",
+  type: "payment.created",
   payload: {
     amount: 1000,
   },
 });
 
-const signature = "your-hmac-signature";
-const secret = "your-webhook-secret";
+verifyHmacSignature(rawBody, "sha256=your-signature", "your-webhook-secret");
 
-// Throws WebhookSignatureError if the signature is invalid.
-verifyHmacSignature(payload, signature, secret);
-
-const event = JSON.parse(payload);
+const event = JSON.parse(rawBody);
 
 const result = await handleWebhook(event, {
   store,
   getKey: (event) => event.id,
   handler: async (event) => {
-    console.log("Processing event:", event);
+    console.log("Processing webhook:", event);
   },
 });
 
 console.log(result);
-// "processed" or "duplicate"
 ```
 
-### What happens?
+`handleWebhook` returns:
 
-For a new event:
+```ts
+"processed" | "duplicate";
+```
+
+A new event is processed once:
 
 ```text
-request
-  ↓
-verify signature
+webhook received
   ↓
 claim event
   ↓
-run handler
+process handler
   ↓
 mark completed
 ```
 
-For a duplicate event:
+A duplicate delivery is ignored:
 
 ```text
-request
+webhook received
   ↓
-verify signature
+event already claimed or completed
   ↓
-claim event
-  ↓
-duplicate
+return "duplicate"
 ```
 
 If the handler fails:
 
 ```text
-request
+webhook received
   ↓
 claim event
   ↓
-run handler
-  ↓
-handler fails
+handler throws
   ↓
 release event
   ↓
@@ -128,9 +121,11 @@ const result = await handleWebhook(event, {
 
 If a worker claims an event but never completes or releases it, the processing claim eventually expires and the event can be attempted again.
 
-A lease is not a heartbeat. If a handler runs longer than the configured lease, another worker may be able to claim the event after the lease expires.
+While the handler is running, `webhook-safe` automatically renews the processing lease. This prevents long-running handlers from losing their claim simply because the original lease duration elapsed.
 
-Choose a lease duration appropriate for the maximum expected processing time of your handler.
+Lease renewal is ownership-safe: a worker can renew only the claim it currently owns. If renewal fails or the worker no longer owns the claim, `handleWebhook` rejects instead of reporting the event as successfully processed.
+
+Choose a lease duration that gives your store enough time to renew the claim reliably during normal operation.
 
 ## Retry behavior
 
@@ -146,13 +141,22 @@ await handleWebhook(event, {
 });
 ```
 
-If `processPayment()` throws, the event is not marked completed.
+If `processPayment` throws, the claim is released.
 
-A later delivery can therefore claim and process the event again.
+A later delivery can claim the event again and retry the work.
 
-## MemoryStore
+Processing claims also expire automatically if a worker disappears without completing or releasing them.
 
-`MemoryStore` is useful for development, tests, and applications where in-process state is sufficient.
+## Stores
+
+### MemoryStore
+
+`MemoryStore` is useful for:
+
+- local development
+- tests
+- examples
+- single-process applications
 
 ```ts
 import { MemoryStore } from "webhook-safe";
@@ -160,23 +164,13 @@ import { MemoryStore } from "webhook-safe";
 const store = new MemoryStore();
 ```
 
-The store is local to the current process.
+Completed events remain in memory for the lifetime of the store instance.
 
-Completed events remain in the `MemoryStore` for the lifetime of that `MemoryStore` instance.
+For production systems with multiple application instances, use a shared store such as Redis.
 
-For production applications with multiple processes or instances, use a shared store such as Redis.
+### RedisStore
 
-## RedisStore
-
-`RedisStore` provides shared idempotency state using Redis.
-
-The Redis client is an optional peer dependency:
-
-```bash
-npm install redis
-```
-
-Example:
+`RedisStore` provides shared idempotency state across multiple application instances.
 
 ```ts
 import { createClient } from "redis";
@@ -191,153 +185,135 @@ await client.connect();
 const store = new RedisStore(client);
 ```
 
-`RedisStore` uses an atomic Redis `SET NX PX` operation to claim events.
-
-Each processing claim receives a unique ownership token.
-
-Completion and release verify that the caller still owns the claim before changing the event state.
-
-This prevents an expired worker from completing or releasing a newer worker's claim.
-
-### Redis completed-event retention
-
-Completed events are retained for **24 hours by default**.
-
-You can configure the retention period with the third constructor argument:
-
-```ts
-const store = new RedisStore(client, "webhook-safe:", 7 * 24 * 60 * 60 * 1000);
-```
-
-The constructor arguments are:
-
-```ts
-new RedisStore(client, prefix, completedTtlMs);
-```
-
-`completedTtlMs` must be a finite number greater than `0`.
-
-The prefix defaults to:
-
-```text
-webhook-safe:
-```
-
-## Production considerations
-
-### Use shared storage
-
-If your application runs multiple processes or instances, use a shared idempotency store such as Redis.
-
-An in-memory store cannot coordinate claims between separate processes.
-
-### Choose an appropriate lease
-
-The processing lease should be long enough for normal webhook processing.
-
-If a handler can legitimately run longer than the lease, another worker may reclaim the event after the lease expires.
-
-### Understand completed-event retention
-
-With Redis, completed events are retained for 24 hours by default.
-
-After a completed Redis entry expires, the same event ID can be processed again if the webhook provider redelivers it.
-
-Choose a retention period appropriate for your provider's retry behavior and your application's requirements.
-
-## API
-
-### `handleWebhook()`
-
-Processes a webhook event while preventing duplicate processing.
+You can then use it with `handleWebhook`:
 
 ```ts
 const result = await handleWebhook(event, {
   store,
   getKey: (event) => event.id,
-  leaseMs: 5 * 60 * 1000,
   handler: async (event) => {
-    // Process the webhook
+    await processWebhook(event);
   },
 });
 ```
 
+Processing claims use Redis expiration so abandoned work can eventually be retried.
+
+Completed events are retained for **24 hours by default**.
+
+You can configure the completed-event retention period:
+
+```ts
+const store = new RedisStore(client, "webhook-safe:", 7 * 24 * 60 * 60 * 1000);
+```
+
+The example above keeps completed event IDs for 7 days.
+
+## Production considerations
+
+For production webhook processing:
+
+- use a shared store such as `RedisStore`
+- use a stable provider event ID as the idempotency key
+- verify webhook signatures before processing
+- preserve the raw request body when signature verification requires it
+- choose an appropriate processing lease
+- choose an appropriate completed-event retention period
+- make downstream side effects idempotent where possible
+
+`webhook-safe` protects ownership of the webhook-processing claim and automatically renews that claim while your handler is running.
+
+Your application should still make important downstream side effects idempotent where possible. Distributed systems can fail at boundaries outside the idempotency store, such as after an external API call succeeds but before the webhook event is marked completed.
+
+## API
+
+### `handleWebhook(event, options)`
+
+Safely processes an event using an idempotency store.
+
+```ts
+const result = await handleWebhook(event, {
+  store,
+  getKey: (event) => event.id,
+  handler: async (event) => {
+    // Process event
+  },
+  leaseMs: 5 * 60 * 1000,
+});
+```
+
+Options:
+
+- `store` — idempotency store
+- `getKey` — returns the unique idempotency key for the event
+- `handler` — processes the event
+- `leaseMs` — optional processing lease duration
+
 Returns:
 
 ```ts
-"processed" | "duplicate";
-```
-
-`"processed"` means the current call acquired the processing claim, successfully ran the handler, and marked the event completed.
-
-`"duplicate"` means another processing claim already exists or the event has already been completed.
-
-### `IdempotencyStore`
-
-The store interface allows custom idempotency implementations.
-
-```ts
-interface IdempotencyStore {
-  get(key: string): Promise<EventStatus | null>;
-
-  claim(key: string, leaseMs: number): Promise<IdempotencyClaim | null>;
-
-  release(key: string, claim: IdempotencyClaim): Promise<void>;
-
-  setCompleted(key: string, claim: IdempotencyClaim): Promise<void>;
-}
+Promise<"processed" | "duplicate">;
 ```
 
 ### `MemoryStore`
 
-In-memory idempotency store.
+In-memory implementation of the idempotency store.
 
 ```ts
-import { MemoryStore } from "webhook-safe";
-
 const store = new MemoryStore();
 ```
 
 ### `RedisStore`
 
-Redis-backed idempotency store.
+Redis-backed implementation of the idempotency store.
 
 ```ts
-import { RedisStore } from "webhook-safe";
-
 const store = new RedisStore(client);
 ```
 
-### `verifyHmacSignature()`
-
-Verifies an HMAC-SHA256 signature.
+Optional constructor arguments:
 
 ```ts
-verifyHmacSignature(payload, signature, secret);
+const store = new RedisStore(client, "webhook-safe:", 24 * 60 * 60 * 1000);
 ```
 
-The signature may be provided as a raw hexadecimal digest or with the common `sha256=` prefix:
+Arguments:
+
+1. Redis client
+2. key prefix
+3. completed-event retention in milliseconds
+
+### `verifyHmacSignature(payload, signature, secret)`
+
+Verifies an HMAC-SHA256 webhook signature.
 
 ```ts
-verifyHmacSignature(payload, "abc123...", secret);
-verifyHmacSignature(payload, "sha256=abc123...", secret);
+verifyHmacSignature(rawBody, signature, process.env.WEBHOOK_SECRET!);
 ```
 
-The function returns normally when the signature is valid.
+Both of these signature formats are accepted:
 
-It throws `WebhookSignatureError` when the signature is invalid.
+```text
+0123456789abcdef...
+```
 
-### `WebhookSignatureError`
+```text
+sha256=0123456789abcdef...
+```
 
-Thrown when webhook signature verification fails.
+An invalid signature throws `WebhookSignatureError`.
+
+### `isWebhookEvent(value)`
+
+Runtime validation helper for the generic webhook event shape.
 
 ```ts
-import { WebhookSignatureError } from "webhook-safe";
+if (!isWebhookEvent(value)) {
+  throw new Error("Invalid webhook event");
+}
 ```
 
-### `WebhookEvent`
-
-The generic webhook event type:
+The expected shape is:
 
 ```ts
 interface WebhookEvent {
@@ -347,66 +323,74 @@ interface WebhookEvent {
 }
 ```
 
-### `isWebhookEvent()`
+## Custom stores
 
-Runtime validation for the generic webhook event shape.
+You can implement your own persistence backend using the `IdempotencyStore` interface.
 
 ```ts
-import { isWebhookEvent } from "webhook-safe";
+import type {
+  EventStatus,
+  IdempotencyClaim,
+  IdempotencyStore,
+} from "webhook-safe";
 
-if (!isWebhookEvent(value)) {
-  throw new Error("Invalid webhook event");
+class CustomStore implements IdempotencyStore {
+  async get(key: string): Promise<EventStatus | null> {
+    // Read the current state.
+    return null;
+  }
+
+  async claim(key: string, leaseMs: number): Promise<IdempotencyClaim | null> {
+    // Atomically claim the event.
+    return null;
+  }
+
+  async renew(
+    key: string,
+    claim: IdempotencyClaim,
+    leaseMs: number,
+  ): Promise<boolean> {
+    // Renew only if this claim still owns the event.
+    return false;
+  }
+
+  async release(key: string, claim: IdempotencyClaim): Promise<void> {
+    // Release only if this claim still owns the event.
+  }
+
+  async setCompleted(key: string, claim: IdempotencyClaim): Promise<void> {
+    // Complete only if this claim still owns the event.
+  }
 }
 ```
 
-### `IdempotencyClaim`
-
-Represents ownership of an active processing claim.
-
-```ts
-interface IdempotencyClaim {
-  token: string;
-}
-```
-
-Claim ownership is used to ensure that an expired worker cannot modify a newer worker's claim.
-
-### `EventStatus`
-
-The possible stored event states:
-
-```ts
-type EventStatus = "processing" | "completed";
-```
-
-## Framework agnostic
-
-`webhook-safe` does not depend on Express, Fastify, Hono, Next.js, NestJS, or another HTTP framework.
-
-Verify the provider signature using the raw request body, parse the event, and pass it to `handleWebhook()`.
-
-This allows the same idempotency logic to be used across different frameworks and runtimes.
+Custom stores should implement `claim`, `renew`, `release`, and `setCompleted` using atomic ownership checks where supported by the underlying datastore.
 
 ## Security
 
-Always verify the webhook signature before processing an untrusted webhook payload.
+Webhook signatures should be verified before processing an event.
 
-For HMAC verification, use the raw request body that was received from the provider.
+`verifyHmacSignature`:
 
-Do not parse and re-serialize JSON before signature verification if your webhook provider signs the raw request body.
+- computes an HMAC-SHA256 digest
+- accepts raw hexadecimal signatures
+- accepts signatures prefixed with `sha256=`
+- compares signatures using a timing-safe comparison
+- throws `WebhookSignatureError` when verification fails
+
+Always use the raw request payload expected by your webhook provider when verifying signatures.
 
 ## Roadmap
 
 Potential future additions include:
 
 - PostgreSQL store
-- Stripe integration
-- GitHub integration
-- Shopify integration
-- Replay protection
-- Framework integrations
-- Operational dashboard
-- Lease renewal / heartbeat support
+- Stripe webhook helpers
+- GitHub webhook helpers
+- Shopify webhook helpers
+- replay protection
+- framework integrations
+- operational dashboard
 
 ## License
 

@@ -233,6 +233,68 @@ describe("handleWebhook", () => {
     expect(secondHandler).toHaveBeenCalledTimes(1);
   });
 
+  it("renews the lease while the handler is still running", async () => {
+    const store = new MemoryStore();
+
+    let resolveHandler!: () => void;
+
+    const handlerFinished = new Promise<void>((resolve) => {
+      resolveHandler = resolve;
+    });
+
+    const handler = vi.fn(async () => {
+      await handlerFinished;
+    });
+
+    const event = { id: "event_123" };
+
+    const first = handleWebhook(event, {
+      store,
+      getKey: (event) => event.id,
+      handler,
+      leaseMs: 60,
+    });
+
+    await vi.waitFor(() => {
+      expect(handler).toHaveBeenCalledTimes(1);
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 80));
+
+    const secondClaim = await store.claim(event.id, 60);
+
+    expect(secondClaim).toBeNull();
+
+    resolveHandler();
+
+    await expect(first).resolves.toBe("processed");
+  });
+
+  it("rejects when lease renewal fails", async () => {
+    const store = new MemoryStore();
+
+    vi.spyOn(store, "renew").mockRejectedValue(new Error("renewal failed"));
+
+    const handler = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          setTimeout(resolve, 100);
+        }),
+    );
+
+    await expect(
+      handleWebhook(
+        { id: "event_123" },
+        {
+          store,
+          getKey: (event) => event.id,
+          handler,
+          leaseMs: 60,
+        },
+      ),
+    ).rejects.toThrow("renewal failed");
+  });
+
   it("does not allow an expired worker to complete a newer claim", async () => {
     const store = new MemoryStore();
 

@@ -138,6 +138,51 @@ describe("RedisStore", () => {
     expect(firstClaim?.token).not.toBe(secondClaim?.token);
   });
 
+  it("renews a processing lease", async () => {
+    const client = createMockClient();
+    client.eval.mockResolvedValue(1);
+
+    const store = new RedisStore(client as any);
+    const claim = { token: "claim_123" };
+
+    const renewed = await store.renew("event_123", claim, 30_000);
+
+    expect(renewed).toBe(true);
+
+    expect(client.eval).toHaveBeenCalledWith(
+      expect.stringContaining('redis.call("PEXPIRE", KEYS[1], ARGV[2])'),
+      {
+        keys: ["webhook-safe:event_123"],
+        arguments: ["claim_123", "30000"],
+      },
+    );
+  });
+
+  it("returns false when a processing lease is not owned by the claim", async () => {
+    const client = createMockClient();
+    client.eval.mockResolvedValue(0);
+
+    const store = new RedisStore(client as any);
+    const claim = { token: "old_claim" };
+
+    const renewed = await store.renew("event_123", claim, LEASE_MS);
+
+    expect(renewed).toBe(false);
+  });
+
+  it("rejects an invalid renewal lease", async () => {
+    const client = createMockClient();
+
+    const store = new RedisStore(client as any);
+    const claim = { token: "claim_123" };
+
+    await expect(store.renew("event_123", claim, 0)).rejects.toThrow(
+      RangeError,
+    );
+
+    expect(client.eval).not.toHaveBeenCalled();
+  });
+
   it("releases using an atomic ownership check", async () => {
     const client = createMockClient();
     client.eval.mockResolvedValue(1);

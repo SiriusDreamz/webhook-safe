@@ -16,6 +16,13 @@ end
 return 0
 `;
 
+const RENEW_SCRIPT = `
+if redis.call("GET", KEYS[1]) == ARGV[1] then
+  return redis.call("PEXPIRE", KEYS[1], ARGV[2])
+end
+return 0
+`;
+
 const COMPLETE_SCRIPT = `
 if redis.call("GET", KEYS[1]) == ARGV[1] then
   return redis.call("SET", KEYS[1], "completed", "PX", ARGV[2])
@@ -59,6 +66,21 @@ export class RedisStore implements IdempotencyStore {
     });
 
     return result === "OK" ? claim : null;
+  }
+
+  async renew(
+    key: string,
+    claim: IdempotencyClaim,
+    leaseMs: number,
+  ): Promise<boolean> {
+    validateLeaseMs(leaseMs);
+
+    const result = await this.client.eval(RENEW_SCRIPT, {
+      keys: [this.key(key)],
+      arguments: [claim.token, String(leaseMs)],
+    });
+
+    return result === 1;
   }
 
   async release(key: string, claim: IdempotencyClaim): Promise<void> {

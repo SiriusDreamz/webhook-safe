@@ -72,6 +72,30 @@ export class MemoryStore implements IdempotencyStore {
     }
   }
 
+  async renew(
+    key: string,
+    claim: IdempotencyClaim,
+    leaseMs: number,
+  ): Promise<boolean> {
+    validateLeaseMs(leaseMs);
+
+    const existing = this.events.get(key);
+
+    if (
+      !existing ||
+      existing.status !== "processing" ||
+      existing.claimToken !== claim.token ||
+      existing.expiresAt === null ||
+      existing.expiresAt <= Date.now()
+    ) {
+      return false;
+    }
+
+    existing.expiresAt = Date.now() + leaseMs;
+
+    return true;
+  }
+
   async setCompleted(key: string, claim: IdempotencyClaim): Promise<void> {
     const existing = this.events.get(key);
 

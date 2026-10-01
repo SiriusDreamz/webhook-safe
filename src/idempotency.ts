@@ -18,6 +18,17 @@ export interface IdempotencyStore {
   claim(key: string, leaseMs: number): Promise<IdempotencyClaim | null>;
 
   /**
+   * Renews a processing lease only if the supplied claim still owns it.
+   *
+   * Returns true when the lease was renewed.
+   */
+  renew(
+    key: string,
+    claim: IdempotencyClaim,
+    leaseMs: number,
+  ): Promise<boolean>;
+
+  /**
    * Releases an event only if the supplied claim still owns it.
    */
   release(key: string, claim: IdempotencyClaim): Promise<void>;
