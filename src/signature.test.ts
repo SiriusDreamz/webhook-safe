@@ -17,6 +17,16 @@ describe("verifyHmacSignature", () => {
     }).not.toThrow();
   });
 
+  it("accepts a sha256-prefixed signature", () => {
+    const signature = createHmac("sha256", secret)
+      .update(payload)
+      .digest("hex");
+
+    expect(() => {
+      verifyHmacSignature(payload, `sha256=${signature}`, secret);
+    }).not.toThrow();
+  });
+
   it("rejects an invalid signature", () => {
     expect(() => {
       verifyHmacSignature(payload, "invalid_signature", secret);
