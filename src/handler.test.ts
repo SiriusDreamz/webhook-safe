@@ -13,7 +13,7 @@ describe("handleWebhook", () => {
         store,
         getKey: (event) => event.id,
         handler,
-      }
+      },
     );
 
     expect(result).toBe("processed");
@@ -57,7 +57,7 @@ describe("handleWebhook", () => {
         store,
         getKey: (event) => event.id,
         handler,
-      })
+      }),
     ).rejects.toThrow("temporary failure");
 
     const result = await handleWebhook(event, {
@@ -133,8 +133,8 @@ describe("handleWebhook", () => {
           getKey: (event) => event.id,
           handler,
           leaseMs: 0,
-        }
-      )
+        },
+      ),
     ).rejects.toThrow(RangeError);
 
     expect(handler).not.toHaveBeenCalled();
@@ -161,5 +161,98 @@ describe("handleWebhook", () => {
 
     expect(result).toBe("processed");
     expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it("only processes concurrent deliveries once", async () => {
+    const store = new MemoryStore();
+
+    let resolveHandler!: () => void;
+
+    const handlerStarted = new Promise<void>((resolve) => {
+      resolveHandler = resolve;
+    });
+
+    const handler = vi.fn(async () => {
+      await handlerStarted;
+    });
+
+    const event = { id: "event_123" };
+
+    const first = handleWebhook(event, {
+      store,
+      getKey: (event) => event.id,
+      handler,
+    });
+
+    await vi.waitFor(() => {
+      expect(handler).toHaveBeenCalledTimes(1);
+    });
+
+    const second = await handleWebhook(event, {
+      store,
+      getKey: (event) => event.id,
+      handler,
+    });
+
+    expect(second).toBe("duplicate");
+    expect(handler).toHaveBeenCalledTimes(1);
+
+    resolveHandler();
+
+    const firstResult = await first;
+
+    expect(firstResult).toBe("processed");
+  });
+
+  it("releases the claim when the handler fails", async () => {
+    const store = new MemoryStore();
+
+    const firstHandler = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("temporary failure"));
+
+    const firstEvent = { id: "event_123" };
+
+    await expect(
+      handleWebhook(firstEvent, {
+        store,
+        getKey: (event) => event.id,
+        handler: firstHandler,
+      }),
+    ).rejects.toThrow("temporary failure");
+
+    const secondHandler = vi.fn();
+
+    const result = await handleWebhook(firstEvent, {
+      store,
+      getKey: (event) => event.id,
+      handler: secondHandler,
+    });
+
+    expect(result).toBe("processed");
+    expect(secondHandler).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not allow an expired worker to complete a newer claim", async () => {
+    const store = new MemoryStore();
+
+    const firstClaim = await store.claim("event_123", 10);
+
+    expect(firstClaim).not.toBeNull();
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    const secondClaim = await store.claim("event_123", 60_000);
+
+    expect(secondClaim).not.toBeNull();
+    expect(secondClaim?.token).not.toBe(firstClaim?.token);
+
+    await store.setCompleted("event_123", firstClaim!);
+
+    expect(await store.get("event_123")).toBe("processing");
+
+    await store.setCompleted("event_123", secondClaim!);
+
+    expect(await store.get("event_123")).toBe("completed");
   });
 });
