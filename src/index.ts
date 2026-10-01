@@ -31,6 +31,8 @@ export type {
 
 export { RedisStore } from "./stores/redis.js";
 
+export { PostgresStore, POSTGRES_STORE_SCHEMA } from "./stores/postgres.js";
+
 export { verifyGitHubSignature } from "./github.js";
 
 export type { GitHubSignatureOptions } from "./github.js";

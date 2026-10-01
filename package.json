@@ -38,15 +38,21 @@
   ],
   "devDependencies": {
     "@types/node": "^24.0.0",
+    "@types/pg": "^8.23.1",
+    "pg": "^8.23.1",
     "redis": "^6.3.0",
     "tsup": "^8.0.0",
     "typescript": "^5.0.0",
     "vitest": "^3.0.0"
   },
   "peerDependencies": {
+    "pg": "^8.23.1",
     "redis": "^6.3.0"
   },
   "peerDependenciesMeta": {
+    "pg": {
+      "optional": true
+    },
     "redis": {
       "optional": true
     }
