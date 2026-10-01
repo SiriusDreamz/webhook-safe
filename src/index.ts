@@ -30,3 +30,7 @@ export type {
 } from "./stripe-event.js";
 
 export { RedisStore } from "./stores/redis.js";
+
+export { verifyGitHubSignature } from "./github.js";
+
+export type { GitHubSignatureOptions } from "./github.js";
