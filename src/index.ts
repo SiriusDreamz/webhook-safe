@@ -18,4 +18,15 @@ export { WebhookError, WebhookSignatureError } from "./errors.js";
 
 export { verifyHmacSignature } from "./signature.js";
 
+export { verifyStripeSignature } from "./stripe.js";
+
+export type { StripeSignatureOptions } from "./stripe.js";
+
+export { parseStripeWebhook } from "./stripe-event.js";
+
+export type {
+  ParseStripeWebhookOptions,
+  StripeWebhookEvent,
+} from "./stripe-event.js";
+
 export { RedisStore } from "./stores/redis.js";
