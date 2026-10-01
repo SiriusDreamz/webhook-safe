@@ -34,3 +34,10 @@ export { RedisStore } from "./stores/redis.js";
 export { verifyGitHubSignature } from "./github.js";
 
 export type { GitHubSignatureOptions } from "./github.js";
+
+export { parseGitHubWebhook } from "./github-event.js";
+
+export type {
+  GitHubWebhookEvent,
+  ParseGitHubWebhookOptions,
+} from "./github-event.js";
