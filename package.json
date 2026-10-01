@@ -1,6 +1,6 @@
 {
   "name": "webhook-safe",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Safe, idempotent webhook handling for Node.js and TypeScript",
   "license": "MIT",
   "repository": {
