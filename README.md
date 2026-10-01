@@ -19,6 +19,9 @@ The easiest inbound webhook idempotency middleware for TypeScript.
 - GitHub webhook signature verification
 - GitHub webhook event parsing
 - GitHub delivery ID support for idempotency
+- Shopify webhook signature verification
+- Shopify webhook event parsing
+- Shopify webhook ID support for idempotency
 - Generic HMAC-SHA256 signature verification
 - Supports raw hexadecimal and `sha256=<hex>` signatures
 - Timing-safe signature comparison
@@ -332,6 +335,112 @@ await handleWebhook(event, {
 });
 ```
 
+## Shopify webhooks
+
+`webhook-safe` includes helpers for verifying and parsing Shopify webhooks.
+
+Shopify signs webhook payloads using HMAC-SHA256. Pass the Shopify HMAC signature header to `verifyShopifySignature` or `parseShopifyWebhook`.
+
+For idempotency, pass the webhook topic and Shopify webhook ID from the incoming request headers to `parseShopifyWebhook`.
+
+A typical Shopify webhook can be handled with:
+
+```ts
+import { handleWebhook, MemoryStore, parseShopifyWebhook } from "webhook-safe";
+
+const store = new MemoryStore();
+
+const event = parseShopifyWebhook(rawBody, shopifyHmacHeader, {
+  secret: process.env.SHOPIFY_WEBHOOK_SECRET!,
+  topic: shopifyTopicHeader,
+  webhookId: shopifyWebhookIdHeader,
+});
+
+const result = await handleWebhook(event, {
+  store,
+  getKey: (event) => event.webhookId,
+  handler: async (event) => {
+    console.log("Processing Shopify event:", event.topic);
+    console.log(event.payload);
+  },
+});
+```
+
+Use the Shopify webhook ID as the idempotency key. Repeated delivery of the same Shopify webhook can then be rejected by the idempotency store.
+
+Preserve the exact raw request body used to calculate the Shopify signature. Do not parse and re-serialize the body before signature verification.
+
+### Shopify signature verification
+
+If you only need signature verification:
+
+```ts
+import { verifyShopifySignature } from "webhook-safe";
+
+verifyShopifySignature(rawBody, shopifyHmacHeader, {
+  secret: process.env.SHOPIFY_WEBHOOK_SECRET!,
+});
+```
+
+`verifyShopifySignature` computes the HMAC-SHA256 digest of the raw payload and compares it with Shopify's Base64-encoded signature using a timing-safe comparison.
+
+A valid signature returns normally. An invalid signature throws `WebhookSignatureError`.
+
+### Shopify event parsing
+
+`parseShopifyWebhook` verifies the signature before parsing the payload.
+
+```ts
+const event = parseShopifyWebhook(rawBody, shopifyHmacHeader, {
+  secret: process.env.SHOPIFY_WEBHOOK_SECRET!,
+  topic: shopifyTopicHeader,
+  webhookId: shopifyWebhookIdHeader,
+});
+```
+
+It returns:
+
+```ts
+interface ShopifyWebhookEvent<T = unknown> {
+  webhookId: string;
+  topic: string;
+  payload: T;
+}
+```
+
+You can provide a type for the parsed payload:
+
+```ts
+interface OrderPayload {
+  id: number;
+  email: string;
+  total_price: string;
+}
+
+const event = parseShopifyWebhook<OrderPayload>(rawBody, shopifyHmacHeader, {
+  secret: process.env.SHOPIFY_WEBHOOK_SECRET!,
+  topic: shopifyTopicHeader,
+  webhookId: shopifyWebhookIdHeader,
+});
+
+console.log(event.payload.id);
+console.log(event.payload.total_price);
+```
+
+The generic type is a TypeScript type assertion for your application. `webhook-safe` verifies that the Shopify payload is a JSON object, but it does not validate topic-specific fields inside the payload.
+
+Using `webhookId` with `handleWebhook` prevents the same Shopify delivery from executing your handler multiple times:
+
+```ts
+await handleWebhook(event, {
+  store,
+  getKey: (event) => event.webhookId,
+  handler: async (event) => {
+    await processShopifyEvent(event);
+  },
+});
+```
+
 ## Processing leases
 
 Each processing claim has a lease.
@@ -458,6 +567,8 @@ For production webhook processing:
 For Stripe, use the Stripe event `id` as the idempotency key and preserve the raw request payload used to generate the signature.
 
 For GitHub, use the `X-GitHub-Delivery` value as the idempotency key and preserve the raw request payload used to generate the signature.
+
+For Shopify, use the Shopify webhook ID as the idempotency key and preserve the raw request payload used to generate the signature.
 
 `webhook-safe` protects ownership of the webhook-processing claim and automatically renews that claim while your handler is running.
 
@@ -635,6 +746,58 @@ It throws if:
 - the payload is not valid JSON
 - the parsed payload is not a JSON object
 
+### `verifyShopifySignature(payload, signatureHeader, options)`
+
+Verifies a Shopify webhook HMAC signature.
+
+```ts
+verifyShopifySignature(rawBody, shopifyHmacHeader, {
+  secret: process.env.SHOPIFY_WEBHOOK_SECRET!,
+});
+```
+
+Options:
+
+- `secret` — Shopify webhook secret
+
+A valid signature returns normally. An invalid signature throws `WebhookSignatureError`.
+
+### `parseShopifyWebhook(payload, signatureHeader, options)`
+
+Verifies and parses a Shopify webhook delivery.
+
+```ts
+const event = parseShopifyWebhook(rawBody, shopifyHmacHeader, {
+  secret: process.env.SHOPIFY_WEBHOOK_SECRET!,
+  topic: shopifyTopicHeader,
+  webhookId: shopifyWebhookIdHeader,
+});
+```
+
+Options:
+
+- `secret` — Shopify webhook secret
+- `topic` — Shopify webhook topic
+- `webhookId` — Shopify webhook delivery ID
+
+Returns a `ShopifyWebhookEvent<T>`:
+
+```ts
+interface ShopifyWebhookEvent<T = unknown> {
+  webhookId: string;
+  topic: string;
+  payload: T;
+}
+```
+
+It throws if:
+
+- the Shopify signature is invalid
+- the topic is missing
+- the webhook ID is missing
+- the payload is not valid JSON
+- the parsed payload is not a JSON object
+
 ### `isWebhookEvent(value)`
 
 Runtime validation helper for the generic webhook event shape.
@@ -728,6 +891,15 @@ Webhook signatures should be verified before processing an event.
 
 `parseGitHubWebhook` verifies the GitHub signature before parsing the payload.
 
+`verifyShopifySignature`:
+
+- computes an HMAC-SHA256 digest over the raw webhook payload
+- verifies Shopify's Base64-encoded signature format
+- compares signatures using a timing-safe comparison
+- throws `WebhookSignatureError` when verification fails
+
+`parseShopifyWebhook` verifies the Shopify signature before parsing the payload.
+
 Always use the exact raw request payload expected by your webhook provider when verifying signatures.
 
 ## Roadmap
@@ -735,7 +907,6 @@ Always use the exact raw request payload expected by your webhook provider when 
 Potential future additions include:
 
 - PostgreSQL store
-- Shopify webhook helpers
 - replay tooling
 - framework integrations
 - operational dashboard
