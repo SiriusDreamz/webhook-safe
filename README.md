@@ -151,6 +151,7 @@ event → claim → application crashes → lease expires → retry
 - Framework agnostic
 - Custom idempotency store support
 - Ownership-aware processing claims
+- Configurable Redis completed-event retention
 
 ## API
 
@@ -193,7 +194,7 @@ By default, the lease is **5 minutes**:
 leaseMs: 5 * 60 * 1000;
 ```
 
-If the handler completes successfully, the event is marked as completed and will not be processed again.
+If the handler completes successfully, the event is marked as completed and will not be processed again while the completed record is retained by the store.
 
 If the handler fails, the event is released immediately so a later delivery can retry it.
 
@@ -224,7 +225,9 @@ const store = new MemoryStore();
 
 For production systems running multiple processes or servers, use `RedisStore` or implement `IdempotencyStore` using shared storage.
 
-`MemoryStore` also respects processing leases. An abandoned `"processing"` event becomes claimable after its lease expires.
+`MemoryStore` respects processing leases. An abandoned `"processing"` event becomes claimable after its lease expires.
+
+Completed events remain in memory for the lifetime of the `MemoryStore` instance.
 
 ### `RedisStore`
 
@@ -269,7 +272,25 @@ Each processing claim receives a unique ownership token.
 
 Releasing or completing an event is performed atomically and only succeeds when the supplied claim still owns the event.
 
-The lease is stored using Redis key expiration, so an abandoned processing claim eventually becomes available for a later delivery.
+The processing lease is stored using Redis key expiration, so an abandoned processing claim eventually becomes available for a later delivery.
+
+#### Completed-event retention
+
+Completed events are retained for **24 hours by default**.
+
+After the completed-event TTL expires, the Redis key is removed and a later delivery can be claimed again.
+
+You can configure the completed-event retention period using the third constructor argument:
+
+```ts
+const store = new RedisStore(client, "webhook-safe:", 7 * 24 * 60 * 60 * 1000);
+```
+
+The third argument is the completed-event TTL in milliseconds.
+
+For example, the above configuration retains completed events for 7 days.
+
+The TTL must be a finite number greater than zero.
 
 When your application shuts down, close the Redis connection:
 
@@ -349,15 +370,29 @@ When implementing a custom store, `claim()` must atomically prevent multiple wor
 
 A processing claim should become available again after `leaseMs` if it has not been completed or explicitly released.
 
-## Important production note
+## Important production notes
+
+### Use shared storage for multiple workers
 
 `MemoryStore` stores state only in the current Node.js process.
 
 If your application runs multiple instances, containers, serverless functions, or multiple workers, use `RedisStore` or another shared persistent implementation of `IdempotencyStore`.
 
+### Configure the processing lease carefully
+
 For production workloads, configure the processing lease based on the expected maximum duration of your webhook handler.
 
-A processing claim belongs to the worker that successfully claimed it. If the claim expires and another worker successfully claims the same event, the old worker can no longer release or complete the newer claim.
+A processing claim belongs to the worker that successfully claimed it.
+
+If the claim expires and another worker successfully claims the same event, the old worker can no longer release or complete the newer claim.
+
+### Completed-event retention
+
+Redis completed events are retained for 24 hours by default.
+
+Choose a retention period appropriate for the duplicate-delivery window of your webhook provider and your application's requirements.
+
+If a duplicate delivery arrives after the completed record has expired, the event can be processed again.
 
 ## Framework support
 

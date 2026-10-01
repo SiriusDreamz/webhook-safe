@@ -3,3 +3,11 @@ export function validateLeaseMs(leaseMs: number): void {
     throw new RangeError("leaseMs must be a finite number greater than 0");
   }
 }
+
+export function validateCompletedTtlMs(completedTtlMs: number): void {
+  if (!Number.isFinite(completedTtlMs) || completedTtlMs <= 0) {
+    throw new RangeError(
+      "completedTtlMs must be a finite number greater than 0",
+    );
+  }
+}

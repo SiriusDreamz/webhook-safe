@@ -1,11 +1,13 @@
 import type { RedisClientType } from "redis";
 import { createClaimToken } from "../claim.js";
-import { validateLeaseMs } from "../lease.js";
+import { validateCompletedTtlMs, validateLeaseMs } from "../lease.js";
 import type {
   EventStatus,
   IdempotencyClaim,
   IdempotencyStore,
 } from "../idempotency.js";
+
+const DEFAULT_COMPLETED_TTL_MS = 24 * 60 * 60 * 1000;
 
 const RELEASE_SCRIPT = `
 if redis.call("GET", KEYS[1]) == ARGV[1] then
@@ -16,7 +18,7 @@ return 0
 
 const COMPLETE_SCRIPT = `
 if redis.call("GET", KEYS[1]) == ARGV[1] then
-  return redis.call("SET", KEYS[1], "completed")
+  return redis.call("SET", KEYS[1], "completed", "PX", ARGV[2])
 end
 return 0
 `;
@@ -24,8 +26,11 @@ return 0
 export class RedisStore implements IdempotencyStore {
   constructor(
     private readonly client: RedisClientType,
-    private readonly prefix = "webhook-safe:"
-  ) {}
+    private readonly prefix = "webhook-safe:",
+    private readonly completedTtlMs = DEFAULT_COMPLETED_TTL_MS,
+  ) {
+    validateCompletedTtlMs(this.completedTtlMs);
+  }
 
   async get(key: string): Promise<EventStatus | null> {
     const value = await this.client.get(this.key(key));
@@ -66,7 +71,7 @@ export class RedisStore implements IdempotencyStore {
   async setCompleted(key: string, claim: IdempotencyClaim): Promise<void> {
     await this.client.eval(COMPLETE_SCRIPT, {
       keys: [this.key(key)],
-      arguments: [claim.token],
+      arguments: [claim.token, String(this.completedTtlMs)],
     });
   }
 

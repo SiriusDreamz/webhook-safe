@@ -57,7 +57,7 @@ describe("RedisStore", () => {
       {
         NX: true,
         PX: LEASE_MS,
-      }
+      },
     );
   });
 
@@ -110,7 +110,7 @@ describe("RedisStore", () => {
       {
         NX: true,
         PX: 30_000,
-      }
+      },
     );
   });
 
@@ -152,7 +152,7 @@ describe("RedisStore", () => {
       {
         keys: ["webhook-safe:event_123"],
         arguments: ["claim_123"],
-      }
+      },
     );
   });
 
@@ -169,8 +169,34 @@ describe("RedisStore", () => {
       expect.stringContaining('redis.call("GET", KEYS[1]) == ARGV[1]'),
       {
         keys: ["webhook-safe:event_123"],
-        arguments: ["claim_123"],
-      }
+        arguments: ["claim_123", "86400000"],
+      },
     );
+  });
+});
+
+describe("completed TTL validation", () => {
+  it("rejects zero completed TTL", () => {
+    const client = createMockClient();
+
+    expect(() => new RedisStore(client as any, "webhook-safe:", 0)).toThrow(
+      "completedTtlMs must be a finite number greater than 0",
+    );
+  });
+
+  it("rejects negative completed TTL", () => {
+    const client = createMockClient();
+
+    expect(() => new RedisStore(client as any, "webhook-safe:", -1)).toThrow(
+      "completedTtlMs must be a finite number greater than 0",
+    );
+  });
+
+  it("rejects non-finite completed TTL", () => {
+    const client = createMockClient();
+
+    expect(
+      () => new RedisStore(client as any, "webhook-safe:", Infinity),
+    ).toThrow("completedTtlMs must be a finite number greater than 0");
   });
 });
