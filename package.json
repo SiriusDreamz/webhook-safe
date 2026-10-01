@@ -3,6 +3,14 @@
   "version": "0.1.0",
   "description": "Safe, idempotent webhook handling for Node.js and TypeScript",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+ssh://git@github.com/SiriusDreamz/webhook-safe.git"
+  },
+  "bugs": {
+    "url": "https://github.com/SiriusDreamz/webhook-safe/issues"
+  },
+  "homepage": "https://github.com/SiriusDreamz/webhook-safe#readme",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
