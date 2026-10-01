@@ -41,3 +41,14 @@ export type {
   GitHubWebhookEvent,
   ParseGitHubWebhookOptions,
 } from "./github-event.js";
+
+export { verifyShopifySignature } from "./shopify.js";
+
+export type { ShopifySignatureOptions } from "./shopify.js";
+
+export { parseShopifyWebhook } from "./shopify-event.js";
+
+export type {
+  ShopifyWebhookEvent,
+  ParseShopifyWebhookOptions,
+} from "./shopify-event.js";
