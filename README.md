@@ -7,6 +7,7 @@ The easiest inbound webhook idempotency middleware for TypeScript.
 ## Features
 
 - Redis-backed idempotency
+- PostgreSQL-backed idempotency
 - Duplicate event protection
 - Atomic event claiming
 - Automatically renewed processing leases
@@ -31,12 +32,27 @@ The easiest inbound webhook idempotency middleware for TypeScript.
 - Custom idempotency store support
 - In-memory `MemoryStore`
 - Redis-backed `RedisStore`
-- Configurable Redis completed-event retention
+- PostgreSQL-backed `PostgresStore`
+- Configurable completed-event retention
 
 ## Installation
 
 ```bash
 npm install webhook-safe
+```
+
+`MemoryStore` requires no additional dependencies.
+
+For Redis:
+
+```bash
+npm install redis
+```
+
+For PostgreSQL:
+
+```bash
+npm install pg
 ```
 
 ## Basic usage
@@ -505,11 +521,19 @@ const store = new MemoryStore();
 
 Completed events remain in memory for the lifetime of the store instance.
 
-For production systems with multiple application instances, use a shared store such as Redis.
+For production systems with multiple application instances, use a shared store such as Redis or PostgreSQL.
 
 ### RedisStore
 
 `RedisStore` provides shared idempotency state across multiple application instances.
+
+Install the Redis client:
+
+```bash
+npm install redis
+```
+
+Then create the store:
 
 ```ts
 import { createClient } from "redis";
@@ -552,11 +576,79 @@ The example above keeps completed event IDs for 7 days.
 
 The Redis implementation is also exercised against a real Redis service in CI.
 
+### PostgresStore
+
+`PostgresStore` provides shared idempotency state using PostgreSQL.
+
+Install the PostgreSQL client:
+
+```bash
+npm install pg
+```
+
+Create a PostgreSQL pool and initialize the `webhook-safe` table:
+
+```ts
+import { Pool } from "pg";
+import { POSTGRES_STORE_SCHEMA, PostgresStore } from "webhook-safe";
+
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+});
+
+await pool.query(POSTGRES_STORE_SCHEMA);
+
+const store = new PostgresStore(pool);
+```
+
+`POSTGRES_STORE_SCHEMA` creates the required table if it does not already exist:
+
+```sql
+CREATE TABLE IF NOT EXISTS webhook_safe_events (
+  key TEXT PRIMARY KEY,
+  token TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (
+    status IN ('processing', 'completed')
+  ),
+  expires_at TIMESTAMPTZ NOT NULL
+);
+```
+
+You can then use the store with `handleWebhook` exactly like the other stores:
+
+```ts
+const result = await handleWebhook(event, {
+  store,
+  getKey: (event) => event.id,
+  handler: async (event) => {
+    await processWebhook(event);
+  },
+});
+```
+
+Processing claims expire automatically, allowing abandoned work to be reclaimed.
+
+Completed events are retained for **24 hours by default**.
+
+You can configure the completed-event retention period:
+
+```ts
+const store = new PostgresStore(pool, 7 * 24 * 60 * 60 * 1000);
+```
+
+The example above keeps completed event IDs for 7 days.
+
+`PostgresStore` uses atomic PostgreSQL `INSERT ... ON CONFLICT` and ownership-checked `UPDATE` and `DELETE` operations for claiming, renewing, releasing, and completing webhook processing.
+
+Expired rows do not need to be removed before their event key can be claimed again. Applications may still periodically remove expired rows if they want to reclaim database storage.
+
+The PostgreSQL implementation is exercised against a real PostgreSQL service in CI.
+
 ## Production considerations
 
 For production webhook processing:
 
-- use a shared store such as `RedisStore`
+- use a shared store such as `RedisStore` or `PostgresStore`
 - use a stable provider event or delivery ID as the idempotency key
 - verify webhook signatures before processing
 - preserve the exact raw request body when signature verification requires it
@@ -631,6 +723,33 @@ Arguments:
 1. Redis client
 2. key prefix
 3. completed-event retention in milliseconds
+
+### `PostgresStore`
+
+PostgreSQL-backed implementation of the idempotency store.
+
+```ts
+const store = new PostgresStore(pool);
+```
+
+Optional completed-event retention:
+
+```ts
+const store = new PostgresStore(pool, 24 * 60 * 60 * 1000);
+```
+
+Arguments:
+
+1. PostgreSQL client or pool
+2. completed-event retention in milliseconds
+
+Initialize the required table with:
+
+```ts
+await pool.query(POSTGRES_STORE_SCHEMA);
+```
+
+`POSTGRES_STORE_SCHEMA` is exported from `webhook-safe`.
 
 ### `verifyHmacSignature(payload, signature, secret)`
 
@@ -906,7 +1025,6 @@ Always use the exact raw request payload expected by your webhook provider when 
 
 Potential future additions include:
 
-- PostgreSQL store
 - replay tooling
 - framework integrations
 - operational dashboard
