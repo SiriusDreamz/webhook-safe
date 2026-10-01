@@ -13,6 +13,9 @@ The easiest inbound webhook idempotency middleware for TypeScript.
 - Retry after handler failure
 - Retry after abandoned processing
 - Ownership-safe completion and release
+- Stripe webhook signature verification
+- Stripe webhook event parsing
+- Stripe timestamp tolerance and replay protection
 - Generic HMAC-SHA256 signature verification
 - Supports raw hexadecimal and `sha256=<hex>` signatures
 - Timing-safe signature comparison
@@ -100,6 +103,117 @@ handler throws
 release event
   ↓
 provider can retry
+```
+
+## Stripe webhooks
+
+`webhook-safe` includes dependency-free helpers for verifying and parsing Stripe webhooks.
+
+A typical Stripe webhook can be handled with:
+
+```ts
+import { handleWebhook, MemoryStore, parseStripeWebhook } from "webhook-safe";
+
+const store = new MemoryStore();
+
+const event = parseStripeWebhook(rawBody, stripeSignatureHeader, {
+  secret: process.env.STRIPE_WEBHOOK_SECRET!,
+});
+
+const result = await handleWebhook(event, {
+  store,
+  getKey: (event) => event.id,
+  handler: async (event) => {
+    console.log("Processing Stripe event:", event.type);
+  },
+});
+```
+
+The raw request body must be preserved for Stripe signature verification. Do not parse and re-serialize the request body before calling `parseStripeWebhook`.
+
+### Stripe signature verification
+
+If you only need signature verification:
+
+```ts
+import { verifyStripeSignature } from "webhook-safe";
+
+const valid = verifyStripeSignature(rawBody, stripeSignatureHeader, {
+  secret: process.env.STRIPE_WEBHOOK_SECRET!,
+});
+
+if (!valid) {
+  throw new Error("Invalid Stripe webhook signature");
+}
+```
+
+Stripe signatures include a timestamp. By default, signatures outside a **5-minute tolerance** are rejected.
+
+You can configure the tolerance:
+
+```ts
+const valid = verifyStripeSignature(rawBody, stripeSignatureHeader, {
+  secret: process.env.STRIPE_WEBHOOK_SECRET!,
+  toleranceSeconds: 600,
+});
+```
+
+Multiple `v1` signatures in the `Stripe-Signature` header are supported. The signature is accepted if any `v1` signature matches.
+
+### Stripe event parsing
+
+`parseStripeWebhook` verifies the signature before parsing the event.
+
+```ts
+const event = parseStripeWebhook(rawBody, stripeSignatureHeader, {
+  secret: process.env.STRIPE_WEBHOOK_SECRET!,
+});
+```
+
+It validates the minimum Stripe event envelope:
+
+```ts
+interface StripeWebhookEvent<T = unknown> {
+  id: string;
+  object: "event";
+  type: string;
+  data: {
+    object: T;
+  };
+}
+```
+
+You can provide a type for `data.object`:
+
+```ts
+interface PaymentIntent {
+  id: string;
+  amount: number;
+}
+
+const event = parseStripeWebhook<PaymentIntent>(
+  rawBody,
+  stripeSignatureHeader,
+  {
+    secret: process.env.STRIPE_WEBHOOK_SECRET!,
+  },
+);
+
+console.log(event.data.object.amount);
+```
+
+The generic type is a TypeScript type assertion for your application. `webhook-safe` validates the Stripe event envelope at runtime, but it does not validate provider-specific fields inside `data.object`.
+
+Using the Stripe event ID as the idempotency key prevents repeated Stripe deliveries from executing your handler multiple times:
+
+```ts
+await handleWebhook(event, {
+  store,
+  getKey: (event) => event.id,
+  handler: async (event) => {
+    await processStripeEvent(event);
+  },
+});
 ```
 
 ## Processing leases
@@ -216,10 +330,12 @@ For production webhook processing:
 - use a shared store such as `RedisStore`
 - use a stable provider event ID as the idempotency key
 - verify webhook signatures before processing
-- preserve the raw request body when signature verification requires it
+- preserve the exact raw request body when signature verification requires it
 - choose an appropriate processing lease
 - choose an appropriate completed-event retention period
 - make downstream side effects idempotent where possible
+
+For Stripe, use the Stripe event `id` as the idempotency key and preserve the raw request payload used to generate the signature.
 
 `webhook-safe` protects ownership of the webhook-processing claim and automatically renews that claim while your handler is running.
 
@@ -303,6 +419,46 @@ sha256=0123456789abcdef...
 
 An invalid signature throws `WebhookSignatureError`.
 
+### `verifyStripeSignature(payload, signatureHeader, options)`
+
+Verifies a Stripe `Stripe-Signature` header.
+
+```ts
+const valid = verifyStripeSignature(rawBody, signatureHeader, {
+  secret: process.env.STRIPE_WEBHOOK_SECRET!,
+});
+```
+
+Options:
+
+- `secret` — Stripe webhook signing secret
+- `toleranceSeconds` — optional timestamp tolerance; defaults to 300 seconds
+- `now` — optional current time in milliseconds, primarily useful for deterministic testing
+
+Returns:
+
+```ts
+boolean;
+```
+
+### `parseStripeWebhook(payload, signatureHeader, options)`
+
+Verifies, parses, and validates a Stripe webhook event.
+
+```ts
+const event = parseStripeWebhook(rawBody, signatureHeader, {
+  secret: process.env.STRIPE_WEBHOOK_SECRET!,
+});
+```
+
+Returns a `StripeWebhookEvent<T>`.
+
+It throws if:
+
+- the Stripe signature is invalid
+- the payload is not valid JSON
+- the payload does not contain the minimum Stripe event envelope
+
 ### `isWebhookEvent(value)`
 
 Runtime validation helper for the generic webhook event shape.
@@ -378,17 +534,25 @@ Webhook signatures should be verified before processing an event.
 - compares signatures using a timing-safe comparison
 - throws `WebhookSignatureError` when verification fails
 
-Always use the raw request payload expected by your webhook provider when verifying signatures.
+`verifyStripeSignature`:
+
+- verifies Stripe's timestamped HMAC-SHA256 signature format
+- supports multiple `v1` signatures
+- compares signatures using a timing-safe comparison
+- rejects signatures outside the configured timestamp tolerance
+
+`parseStripeWebhook` verifies the Stripe signature before parsing the event.
+
+Always use the exact raw request payload expected by your webhook provider when verifying signatures.
 
 ## Roadmap
 
 Potential future additions include:
 
 - PostgreSQL store
-- Stripe webhook helpers
 - GitHub webhook helpers
 - Shopify webhook helpers
-- replay protection
+- replay tooling
 - framework integrations
 - operational dashboard
 
