@@ -16,6 +16,9 @@ The easiest inbound webhook idempotency middleware for TypeScript.
 - Stripe webhook signature verification
 - Stripe webhook event parsing
 - Stripe timestamp tolerance and replay protection
+- GitHub webhook signature verification
+- GitHub webhook event parsing
+- GitHub delivery ID support for idempotency
 - Generic HMAC-SHA256 signature verification
 - Supports raw hexadecimal and `sha256=<hex>` signatures
 - Timing-safe signature comparison
@@ -216,6 +219,119 @@ await handleWebhook(event, {
 });
 ```
 
+## GitHub webhooks
+
+`webhook-safe` includes helpers for verifying and parsing GitHub webhooks.
+
+GitHub signs webhook deliveries using HMAC-SHA256. The signature is provided in the `X-Hub-Signature-256` header.
+
+GitHub also provides:
+
+- `X-GitHub-Event` — the webhook event name
+- `X-GitHub-Delivery` — a unique delivery identifier
+
+A typical GitHub webhook can be handled with:
+
+```ts
+import { handleWebhook, MemoryStore, parseGitHubWebhook } from "webhook-safe";
+
+const store = new MemoryStore();
+
+const event = parseGitHubWebhook(rawBody, signatureHeader, {
+  secret: process.env.GITHUB_WEBHOOK_SECRET!,
+  event: githubEventHeader,
+  deliveryId: githubDeliveryHeader,
+});
+
+const result = await handleWebhook(event, {
+  store,
+  getKey: (event) => event.deliveryId,
+  handler: async (event) => {
+    console.log("Processing GitHub event:", event.event);
+    console.log(event.payload);
+  },
+});
+```
+
+Use the GitHub delivery ID as the idempotency key. Repeated delivery of the same GitHub webhook can then be rejected by the idempotency store.
+
+As with other signed webhook providers, preserve the exact raw request body used to calculate the signature.
+
+### GitHub signature verification
+
+If you only need signature verification:
+
+```ts
+import { verifyGitHubSignature } from "webhook-safe";
+
+verifyGitHubSignature(rawBody, signatureHeader, {
+  secret: process.env.GITHUB_WEBHOOK_SECRET!,
+});
+```
+
+`verifyGitHubSignature` expects the GitHub `sha256=<hex>` signature format.
+
+A valid signature returns normally. An invalid signature throws `WebhookSignatureError`.
+
+### GitHub event parsing
+
+`parseGitHubWebhook` verifies the signature before parsing the payload.
+
+```ts
+const event = parseGitHubWebhook(rawBody, signatureHeader, {
+  secret: process.env.GITHUB_WEBHOOK_SECRET!,
+  event: githubEventHeader,
+  deliveryId: githubDeliveryHeader,
+});
+```
+
+It returns:
+
+```ts
+interface GitHubWebhookEvent<T = unknown> {
+  deliveryId: string;
+  event: string;
+  payload: T;
+}
+```
+
+The event name corresponds to GitHub's `X-GitHub-Event` header, and `deliveryId` corresponds to `X-GitHub-Delivery`.
+
+You can provide a type for the parsed payload:
+
+```ts
+interface PullRequestPayload {
+  action: string;
+  repository: {
+    id: number;
+    full_name: string;
+  };
+}
+
+const event = parseGitHubWebhook<PullRequestPayload>(rawBody, signatureHeader, {
+  secret: process.env.GITHUB_WEBHOOK_SECRET!,
+  event: githubEventHeader,
+  deliveryId: githubDeliveryHeader,
+});
+
+console.log(event.payload.action);
+console.log(event.payload.repository.full_name);
+```
+
+The generic type is a TypeScript type assertion for your application. `webhook-safe` verifies that the payload is a JSON object, but it does not validate provider-specific fields inside the GitHub payload.
+
+Using `deliveryId` with `handleWebhook` prevents the same GitHub delivery from executing your handler multiple times:
+
+```ts
+await handleWebhook(event, {
+  store,
+  getKey: (event) => event.deliveryId,
+  handler: async (event) => {
+    await processGitHubEvent(event);
+  },
+});
+```
+
 ## Processing leases
 
 Each processing claim has a lease.
@@ -323,12 +439,16 @@ const store = new RedisStore(client, "webhook-safe:", 7 * 24 * 60 * 60 * 1000);
 
 The example above keeps completed event IDs for 7 days.
 
+`RedisStore` uses atomic Redis operations and ownership-checked Lua scripts for claiming, renewing, releasing, and completing webhook processing.
+
+The Redis implementation is also exercised against a real Redis service in CI.
+
 ## Production considerations
 
 For production webhook processing:
 
 - use a shared store such as `RedisStore`
-- use a stable provider event ID as the idempotency key
+- use a stable provider event or delivery ID as the idempotency key
 - verify webhook signatures before processing
 - preserve the exact raw request body when signature verification requires it
 - choose an appropriate processing lease
@@ -336,6 +456,8 @@ For production webhook processing:
 - make downstream side effects idempotent where possible
 
 For Stripe, use the Stripe event `id` as the idempotency key and preserve the raw request payload used to generate the signature.
+
+For GitHub, use the `X-GitHub-Delivery` value as the idempotency key and preserve the raw request payload used to generate the signature.
 
 `webhook-safe` protects ownership of the webhook-processing claim and automatically renews that claim while your handler is running.
 
@@ -459,6 +581,60 @@ It throws if:
 - the payload is not valid JSON
 - the payload does not contain the minimum Stripe event envelope
 
+### `verifyGitHubSignature(payload, signatureHeader, options)`
+
+Verifies a GitHub `X-Hub-Signature-256` header.
+
+```ts
+verifyGitHubSignature(rawBody, signatureHeader, {
+  secret: process.env.GITHUB_WEBHOOK_SECRET!,
+});
+```
+
+Options:
+
+- `secret` — GitHub webhook secret
+
+The signature must use the `sha256=<hex>` format.
+
+A valid signature returns normally. An invalid signature throws.
+
+### `parseGitHubWebhook(payload, signatureHeader, options)`
+
+Verifies and parses a GitHub webhook delivery.
+
+```ts
+const event = parseGitHubWebhook(rawBody, signatureHeader, {
+  secret: process.env.GITHUB_WEBHOOK_SECRET!,
+  event: githubEventHeader,
+  deliveryId: githubDeliveryHeader,
+});
+```
+
+Options:
+
+- `secret` — GitHub webhook secret
+- `event` — value of the `X-GitHub-Event` header
+- `deliveryId` — value of the `X-GitHub-Delivery` header
+
+Returns a `GitHubWebhookEvent<T>`:
+
+```ts
+interface GitHubWebhookEvent<T = unknown> {
+  deliveryId: string;
+  event: string;
+  payload: T;
+}
+```
+
+It throws if:
+
+- the GitHub signature is invalid
+- the event header is missing
+- the delivery ID is missing
+- the payload is not valid JSON
+- the parsed payload is not a JSON object
+
 ### `isWebhookEvent(value)`
 
 Runtime validation helper for the generic webhook event shape.
@@ -543,6 +719,15 @@ Webhook signatures should be verified before processing an event.
 
 `parseStripeWebhook` verifies the Stripe signature before parsing the event.
 
+`verifyGitHubSignature`:
+
+- verifies GitHub's `sha256=<hex>` HMAC-SHA256 signature format
+- uses timing-safe signature comparison through the generic HMAC verifier
+- rejects missing or incorrect signature prefixes
+- throws when verification fails
+
+`parseGitHubWebhook` verifies the GitHub signature before parsing the payload.
+
 Always use the exact raw request payload expected by your webhook provider when verifying signatures.
 
 ## Roadmap
@@ -550,7 +735,6 @@ Always use the exact raw request payload expected by your webhook provider when 
 Potential future additions include:
 
 - PostgreSQL store
-- GitHub webhook helpers
 - Shopify webhook helpers
 - replay tooling
 - framework integrations
