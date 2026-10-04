@@ -32,9 +32,21 @@
   "keywords": [
     "webhook",
     "webhooks",
+    "webhook-handler",
+    "webhook-security",
+    "webhook-signature",
+    "webhook-verification",
+    "idempotency",
+    "idempotent",
+    "hmac",
+    "stripe",
+    "github-webhooks",
+    "shopify",
+    "redis",
+    "postgresql",
     "typescript",
-    "node",
-    "idempotency"
+    "nodejs",
+    "distributed-systems"
   ],
   "devDependencies": {
     "@types/node": "^24.0.0",
