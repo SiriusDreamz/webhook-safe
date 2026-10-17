@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Documentation
+
+- Align the Slack guide with the existing provider usage, signature-verification
+  and event-parsing sections. Add HTTP setup, the Socket Mode requirement,
+  mention testing, retry troubleshooting and the separate Cloud guide.
+
 ## 0.7.0 — 2026-10-17
 
 ### Added
