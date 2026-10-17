@@ -54,3 +54,13 @@ export type {
   ShopifyWebhookEvent,
   ParseShopifyWebhookOptions,
 } from "./shopify-event.js";
+
+export { verifySlackSignature } from "./slack.js";
+export type { SlackSignatureOptions } from "./slack.js";
+export { parseSlackWebhook } from "./slack-event.js";
+export type {
+  ParseSlackWebhookOptions,
+  SlackWebhookEvent,
+  SlackUrlVerification,
+  SlackEventCallback,
+} from "./slack-event.js";

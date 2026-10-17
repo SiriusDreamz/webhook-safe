@@ -4,6 +4,8 @@ The easiest inbound webhook idempotency middleware for TypeScript.
 
 `webhook-safe` helps you safely process inbound webhooks without accidentally processing the same event multiple times.
 
+See the [version history](CHANGELOG.md) for new features and release status.
+
 ## Features
 
 - Redis-backed idempotency
@@ -23,6 +25,8 @@ The easiest inbound webhook idempotency middleware for TypeScript.
 - Shopify webhook signature verification
 - Shopify webhook event parsing
 - Shopify webhook ID support for idempotency
+- Slack request signature verification with a five-minute timestamp window
+- Slack Events API callback parsing and signed URL-verification challenges
 - Generic HMAC-SHA256 signature verification
 - Supports raw hexadecimal and `sha256=<hex>` signatures
 - Timing-safe signature comparison
@@ -456,6 +460,64 @@ await handleWebhook(event, {
   },
 });
 ```
+
+## Slack Events API
+
+The next release adds `verifySlackSignature` and `parseSlackWebhook`; these exports
+are not available in the currently published 0.6.1 package until a new version is released.
+
+Preserve the original request bytes and pass exactly one value from each of
+`X-Slack-Signature` and `X-Slack-Request-Timestamp`. Reject duplicate header
+instances in your HTTP adapter before calling these helpers. The verifier also
+supports signed form bodies for slash commands and interactivity; the parser
+supports JSON `event_callback` and `url_verification` envelopes only. Socket Mode,
+OAuth installation, `app_rate_limited`, slash-command parsing and outbound Slack
+notifications are outside this adapter.
+
+```ts
+import { parseSlackWebhook } from "webhook-safe";
+
+const event = parseSlackWebhook(rawBody, slackSignatureHeader, {
+  secret: process.env.SLACK_SIGNING_SECRET!,
+  timestamp: slackRequestTimestampHeader,
+});
+
+if (event.type === "url_verification") {
+  // Respond HTTP 200 with JSON { challenge: event.challenge } immediately.
+} else {
+  const key = JSON.stringify(["slack", event.apiAppId, event.teamId, event.eventId]);
+  // Durably enqueue/deduplicate key + event, then respond HTTP 200.
+}
+```
+
+`verifySlackSignature(rawBody, signatureHeader, options)` returns normally on
+success and throws `WebhookSignatureError` for invalid headers, mismatched
+signatures or timestamps more than 300 seconds from the clock in either
+direction. It hashes `v0:<timestamp>:<raw bytes>` and uses timing-safe comparison.
+`toleranceSeconds` can narrow the window (0–300); `now` is an optional clock in
+milliseconds for tests. Invalid secret/clock/tolerance configuration throws.
+Never parse and re-serialize the body before verification.
+
+`parseSlackWebhook` verifies before JSON parsing. A challenge returns only
+`{ type: "url_verification", challenge }`; the deprecated body token is not
+used as authority. A callback returns `type`, `eventId`, `teamId`, `apiAppId`
+and `event`. It checks the envelope and `event.type`, but a generic TypeScript
+type does not validate event-specific fields; validate those in your consumer.
+
+Slack expects acknowledgment within three seconds. Queue business work durably
+before acknowledging, process it separately, and deduplicate by signed event
+identity, not retry headers. Do not skip a valid event just because
+`X-Slack-Retry-Num` is present: the earlier attempt might have failed before
+persistence. `handleWebhook` can guard work in the durable consumer; use a shared
+Redis/PostgreSQL store across instances and make downstream effects idempotent.
+An in-process claim or detached promise is not durable queue acceptance.
+
+See [the framework-neutral queue acceptance example](examples/slack.ts),
+[Slack request verification](https://docs.slack.dev/authentication/verifying-requests-from-slack/),
+[URL verification](https://docs.slack.dev/apis/events-api/using-http-request-urls/)
+and [event delivery/retries](https://docs.slack.dev/apis/events-api/).
+Webhook Safe Cloud needs a separate integration and compatible released package;
+installing this library does not add a hosted Slack endpoint.
 
 ## Processing leases
 
