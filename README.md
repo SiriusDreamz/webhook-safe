@@ -463,8 +463,9 @@ await handleWebhook(event, {
 
 ## Slack Events API
 
-The next release adds `verifySlackSignature` and `parseSlackWebhook`; these exports
-are not available in the currently published 0.6.1 package until a new version is released.
+Version 0.7.0 adds `verifySlackSignature` and `parseSlackWebhook`. Install
+`webhook-safe@0.7.0` after the v0.7.0 publish workflow completes; version 0.6.1
+does not include these exports.
 
 Preserve the original request bytes and pass exactly one value from each of
 `X-Slack-Signature` and `X-Slack-Request-Timestamp`. Reject duplicate header
