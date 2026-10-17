@@ -4,6 +4,8 @@ The easiest inbound webhook idempotency middleware for TypeScript.
 
 `webhook-safe` helps you safely process inbound webhooks without accidentally processing the same event multiple times.
 
+See the [version history](CHANGELOG.md) for new features and release status.
+
 ## Features
 
 - Redis-backed idempotency
