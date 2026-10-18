@@ -6,6 +6,9 @@ Verify Stripe, GitHub, Shopify, Slack Events API and generic HMAC webhooks, then
 coordinate duplicate-event processing with in-memory, Redis or PostgreSQL stores.
 The library is framework agnostic; preserve raw request bytes in your HTTP adapter.
 
+For managed webhook delivery, retries and event inspection, visit
+[Webhook Safe Cloud](https://www.webhook-safe.com).
+
 **Guides:** [Installation](#installation) · [Basic usage](#basic-usage) ·
 [Stripe](#stripe-webhooks) · [GitHub](#github-webhooks) ·
 [Shopify](#shopify-webhooks) · [Slack](#slack-events-api) ·
