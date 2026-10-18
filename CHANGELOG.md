@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 0.7.3 — 2026-10-18
+
+### Documentation
+
+- Link to Webhook Safe Cloud from the README introduction so npm readers can
+  find the hosted service at https://www.webhook-safe.com.
+- No runtime API or dependency changes.
+
 ## 0.7.2 — 2026-10-18
 
 ### Documentation and discovery

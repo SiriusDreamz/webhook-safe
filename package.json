@@ -1,6 +1,6 @@
 {
   "name": "webhook-safe",
-  "version": "0.7.2",
+  "version": "0.7.3",
   "description": "Webhook signature verification and idempotent processing for Node.js and TypeScript; Stripe, GitHub, Shopify, Slack, Redis and PostgreSQL",
   "license": "MIT",
   "repository": {
