@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Documentation and discovery
+
+- Shorten Slack usage documentation to match the other provider sections; move
+  setup/troubleshooting to a focused example guide and remove obsolete version/install copy.
+- Add provider navigation, Slack API reference entries and a clear library/Cloud distinction.
+- Improve npm description and relevant keywords; use a public HTTPS repository URL.
+  Package version is unchanged; npm README/metadata updates require an approved release.
+
+
 ## 0.7.1 — 2026-10-18
 
 ### Documentation
