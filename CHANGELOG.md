@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.7.1 — 2026-10-18
+
 ### Documentation
 
 - Align the Slack guide with the existing provider usage, signature-verification
