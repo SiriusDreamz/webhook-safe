@@ -1,8 +1,15 @@
 # webhook-safe
 
-The easiest inbound webhook idempotency middleware for TypeScript.
+Webhook signature verification and idempotent processing for Node.js and TypeScript.
 
-`webhook-safe` helps you safely process inbound webhooks without accidentally processing the same event multiple times.
+Verify Stripe, GitHub, Shopify, Slack Events API and generic HMAC webhooks, then
+coordinate duplicate-event processing with in-memory, Redis or PostgreSQL stores.
+The library is framework agnostic; preserve raw request bytes in your HTTP adapter.
+
+**Guides:** [Installation](#installation) · [Basic usage](#basic-usage) ·
+[Stripe](#stripe-webhooks) · [GitHub](#github-webhooks) ·
+[Shopify](#shopify-webhooks) · [Slack](#slack-events-api) ·
+[Stores](#stores) · [API](#api) · [Security](#security)
 
 See the [version history](CHANGELOG.md) for new features and release status.
 
@@ -463,36 +470,13 @@ await handleWebhook(event, {
 
 ## Slack Events API
 
-Slack Events API webhooks can be verified and parsed with `parseSlackWebhook`,
-available from version 0.7.0. Install the package from
-[npm](https://www.npmjs.com/package/webhook-safe).
+`webhook-safe` includes helpers for verifying Slack requests and parsing Events API webhooks.
 
-### Slack app setup
+Slack provides `X-Slack-Signature` and `X-Slack-Request-Timestamp` headers. Use the
+Signing Secret from your app's Basic Information page, and turn Socket Mode off
+when receiving HTTP callbacks.
 
-In your Slack app settings:
-
-1. Turn **Socket Mode off**. Socket Mode sends events over a WebSocket instead
-   of your HTTP Request URL, even if that URL shows Verified.
-2. Under **Event Subscriptions**, enable events and set your HTTPS receiver's
-   URL as the Request URL. Implement the signed challenge response shown below.
-3. Subscribe to the bot events you need. For a mention test, use `app_mention`
-   with the `app_mentions:read` bot scope.
-4. Save changes, install or reinstall the app into the intended test workspace,
-   and invite the app to a test channel. Send a new channel message by selecting
-   the app from the `@` suggestions.
-
-Use the **Signing Secret** from **Basic Information → App Credentials**.
-A bot token, client secret or deprecated verification token is not a signing secret.
-
-### Slack webhook handling
-
-Preserve the original request bytes and pass exactly one value from each of
-`X-Slack-Signature` and `X-Slack-Request-Timestamp`. Reject duplicate header
-instances in your HTTP adapter before calling these helpers. The verifier also
-supports signed form bodies for slash commands and interactivity; the parser
-supports JSON `event_callback` and `url_verification` envelopes only. Socket Mode,
-OAuth installation, `app_rate_limited`, slash-command parsing and outbound Slack
-notifications are outside this adapter.
+A typical Slack webhook can be parsed with:
 
 ```ts
 import { parseSlackWebhook } from "webhook-safe";
@@ -510,6 +494,12 @@ if (event.type === "url_verification") {
 }
 ```
 
+Preserve the exact raw request body and require one value for each signature and
+timestamp header. Slack expects an acknowledgment within three seconds: durably
+queue callbacks before responding and process business work in a separate consumer.
+A detached promise or in-memory claim is not durable acceptance. Deduplicate by
+signed event identity, not retry headers; an earlier delivery may have failed.
+
 ### Slack signature verification
 
 If you only need signature verification:
@@ -523,18 +513,14 @@ verifySlackSignature(rawBody, slackSignatureHeader, {
 });
 ```
 
-`verifySlackSignature(rawBody, signatureHeader, options)` returns normally on
-success and throws `WebhookSignatureError` for invalid headers, mismatched
-signatures or timestamps more than 300 seconds from the clock in either
-direction. It hashes `v0:<timestamp>:<raw bytes>` and uses timing-safe comparison.
-`toleranceSeconds` can narrow the window (0–300); `now` is an optional clock in
-milliseconds for tests. Invalid secret/clock/tolerance configuration throws.
-Never parse and re-serialize the body before verification.
+A valid signature returns normally. Invalid signatures or timestamps more than
+five minutes from the clock throw `WebhookSignatureError`. `toleranceSeconds` can
+narrow this window (0–300); `now` accepts a test clock in milliseconds. Invalid
+configuration throws. Never parse and re-serialize the body before verification.
 
 ### Slack event parsing
 
-`parseSlackWebhook` verifies the signature before parsing the payload. It returns
-one of these results:
+`parseSlackWebhook` verifies the signature before parsing. It returns:
 
 ```ts
 type SlackWebhookEvent<T = Record<string, unknown>> =
@@ -548,43 +534,15 @@ type SlackWebhookEvent<T = Record<string, unknown>> =
     };
 ```
 
-For a challenge, respond immediately with HTTP 200 and JSON
-`{ "challenge": event.challenge }`. Do not queue it as a business event.
-The deprecated body token is not used as authority. The parser checks the
-envelope and `event.type`; the generic type is a TypeScript assertion and does
-not validate event-specific fields. Validate those fields in your consumer.
+The generic type is a TypeScript assertion. The parser validates the envelope and
+`event.type`, not event-specific fields. Validate those fields in your consumer.
+Signed form requests can be verified, but the parser handles only JSON
+`event_callback` and `url_verification`. Socket Mode, OAuth, slash-command parsing
+and outbound notifications are outside this adapter.
 
-### Slack retries and idempotency
-
-Slack expects acknowledgment within three seconds. Queue business work durably
-before acknowledging, process it separately, and deduplicate by signed event
-identity, not retry headers. Do not skip a valid event just because
-`X-Slack-Retry-Num` is present: the earlier attempt might have failed before
-persistence. `handleWebhook` can guard work in the durable consumer; use a shared
-Redis/PostgreSQL store across instances and make downstream effects idempotent.
-An in-process claim or detached promise is not durable queue acceptance.
-
-See [the framework-neutral queue acceptance example](examples/slack.ts),
-[Slack request verification](https://docs.slack.dev/authentication/verifying-requests-from-slack/),
-[URL verification](https://docs.slack.dev/apis/events-api/using-http-request-urls/)
-and [event delivery/retries](https://docs.slack.dev/apis/events-api/).
-
-### Troubleshooting and Cloud
-
-- **Verified URL but no callbacks:** check Socket Mode is off, save event
-  subscriptions, reinstall after permission changes, and use a real app mention
-  in a channel the app has joined. Verification alone does not test callbacks.
-- **Signature rejected:** check the Signing Secret, original body bytes and the
-  single signature/timestamp headers. Do not disable verification to debug it.
-- **Unexpected counts:** compare signed `eventId` values. A retry is another
-  delivery of the same event; a new mention has a new event identity.
-
-For managed ingestion and forwarding, see the separate
-[Webhook Safe Cloud Slack guide](https://www.webhook-safe.com/docs/providers#slack).
-Configure Slack with Cloud's ingestion URL and Cloud with your application's
-destination URL. Cloud answers setup challenges and records accepted callbacks;
-successful ingestion and successful downstream delivery are separate outcomes.
-Installing this library alone does not create a hosted endpoint.
+See the [durable queue example](https://github.com/SiriusDreamz/webhook-safe/blob/master/examples/slack.ts)
+and [Slack setup and troubleshooting](https://github.com/SiriusDreamz/webhook-safe/blob/master/examples/slack.md)
+for HTTP configuration, challenge responses and retry handling.
 
 ## Processing leases
 
@@ -1046,6 +1004,25 @@ It throws if:
 - the payload is not valid JSON
 - the parsed payload is not a JSON object
 
+### `verifySlackSignature(payload, signatureHeader, options)`
+
+Verifies a Slack v0 signature over the original request bytes. Returns normally
+on success and throws `WebhookSignatureError` for invalid signatures or timestamps.
+
+Options:
+
+- `secret` — Slack app Signing Secret
+- `timestamp` — value of `X-Slack-Request-Timestamp`
+- `toleranceSeconds` — optional 0–300-second window; defaults to 300
+- `now` — optional current time in milliseconds, primarily for tests
+
+### `parseSlackWebhook(payload, signatureHeader, options)`
+
+Verifies and parses Slack Events API JSON using the same signature options.
+Returns `SlackWebhookEvent<T>`: a URL-verification challenge or an event callback.
+Throws for invalid signatures, malformed JSON or unsupported/invalid envelopes.
+See [Slack event parsing](#slack-event-parsing) for the result shape.
+
 ### `isWebhookEvent(value)`
 
 Runtime validation helper for the generic webhook event shape.
@@ -1148,7 +1125,16 @@ Webhook signatures should be verified before processing an event.
 
 `parseShopifyWebhook` verifies the Shopify signature before parsing the payload.
 
+`verifySlackSignature` checks Slack v0 signatures with a maximum five-minute timestamp window. `parseSlackWebhook` verifies before parsing Events API JSON; challenge responses do not enter the business-event queue.
+
 Always use the exact raw request payload expected by your webhook provider when verifying signatures.
+
+## Library or hosted service?
+
+Use this package when you want to run verification and idempotency in your own
+application. It does not create an endpoint, queue or hosted delivery worker.
+For managed ingestion, forwarding, retries and event inspection, see the separate
+[Webhook Safe Cloud documentation](https://www.webhook-safe.com/docs).
 
 ## Roadmap
 
