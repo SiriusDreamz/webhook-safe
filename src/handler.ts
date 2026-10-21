@@ -26,52 +26,59 @@ export async function handleWebhook<T>(
   }
 
   const heartbeatIntervalMs = Math.max(1, Math.floor(leaseMs / 3));
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let stopped = false;
+  let renewal: Promise<void> | undefined;
+  let leaseFailed = false;
+  let leaseError: unknown;
+  let rejectHeartbeat!: (error: unknown) => void;
+  const heartbeatFailure = new Promise<never>((_, reject) => {
+    rejectHeartbeat = reject;
+  });
 
-  let heartbeatTimer: ReturnType<typeof setTimeout> | undefined;
-  let stopHeartbeat = false;
-
-  const heartbeat = async (): Promise<void> => {
-    while (!stopHeartbeat) {
-      await new Promise<void>((resolve) => {
-        heartbeatTimer = setTimeout(resolve, heartbeatIntervalMs);
+  const scheduleHeartbeat = (): void => {
+    timer = setTimeout(() => {
+      renewal = Promise.resolve().then(async () => {
+        try {
+          const renewed = await options.store.renew(key, claim, leaseMs);
+          if (!renewed) throw new Error("Webhook processing lease was lost");
+          if (!stopped) scheduleHeartbeat();
+        } catch (error) {
+          leaseFailed = true;
+          leaseError = error;
+          rejectHeartbeat(error);
+        }
       });
-
-      if (stopHeartbeat) {
-        return;
-      }
-
-      const renewed = await options.store.renew(key, claim, leaseMs);
-
-      if (!renewed) {
-        throw new Error("Webhook processing lease was lost");
-      }
-    }
+    }, heartbeatIntervalMs);
   };
 
-  const handlerPromise = options.handler(event);
-  const heartbeatPromise = heartbeat();
+  const stopHeartbeat = async (): Promise<void> => {
+    stopped = true;
+    if (timer !== undefined) clearTimeout(timer);
+    // A renewal already sent to the store must settle before completion/release.
+    await renewal;
+  };
 
   try {
-    await Promise.race([handlerPromise, heartbeatPromise]);
-
-    stopHeartbeat = true;
-
-    if (heartbeatTimer !== undefined) {
-      clearTimeout(heartbeatTimer);
-    }
-
-    await handlerPromise;
+    scheduleHeartbeat();
+    // Promise resolution also captures a synchronous throw from application code.
+    const handlerPromise = Promise.resolve().then(() => options.handler(event));
+    await Promise.race([handlerPromise, heartbeatFailure]);
+    await stopHeartbeat();
+    if (leaseFailed) throw leaseError;
     await options.store.setCompleted(key, claim);
-
     return "processed";
   } catch (error) {
-    stopHeartbeat = true;
-
-    if (heartbeatTimer !== undefined) {
-      clearTimeout(heartbeatTimer);
+    await stopHeartbeat();
+    try {
+      await options.store.release(key, claim);
+    } catch (releaseError) {
+      throw new AggregateError(
+        [error, releaseError],
+        "Webhook processing failed and its claim could not be released",
+        { cause: error },
+      );
     }
-
-    await options.store.release(key, claim);
     throw error;
   }
 }

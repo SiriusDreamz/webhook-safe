@@ -572,6 +572,19 @@ Lease renewal is ownership-safe: a worker can renew only the claim it currently 
 
 Choose a lease duration that gives your store enough time to renew the claim reliably during normal operation.
 
+Immediate synchronous throws and rejected handler promises both release the
+claim. An in-flight renewal settles before completion or release, so a lost lease
+cannot be hidden by a handler finishing at the same time. If processing and
+release both fail, an `AggregateError` contains both failures and retains the
+processing failure as `cause`. A failed release can leave the claim held until
+expiry. Store operations need bounded timeouts supplied by your application.
+
+Lease loss rejects processing but cannot cancel application work that is already
+running. A late handler never marks the event completed through this invocation;
+external side effects still need application-level idempotency. This library does
+not promise exactly-once effects or provide a durable queue.
+
+
 ## Retry behavior
 
 If your handler throws an error, `webhook-safe` releases the event so a later delivery can retry it.
@@ -1131,6 +1144,17 @@ Webhook signatures should be verified before processing an event.
 `verifySlackSignature` checks Slack v0 signatures with a maximum five-minute timestamp window. `parseSlackWebhook` verifies before parsing Events API JSON; challenge responses do not enter the business-event queue.
 
 Always use the exact raw request payload expected by your webhook provider when verifying signatures.
+All signature helpers accept a `string` or `Buffer`; pass the original `Buffer`
+when receiving HTTP bytes. Decoding bytes and encoding them again can change
+signed content. Parsing helpers verify signatures before decoding/parsing JSON;
+provider-specific payload validation remains your application's responsibility.
+
+Stripe timestamps must be unambiguous non-negative decimal integers; duplicate
+`t` fields, fractional/exponent/signed forms and malformed digest lengths are
+rejected. `now` must be finite and non-negative, and the signing secret must not
+be empty. Multiple `v1` candidates remain supported. Shopify expects canonical
+Base64 for its 32-byte SHA-256 digest, including the final `=` padding.
+
 
 ## Library or hosted service?
 

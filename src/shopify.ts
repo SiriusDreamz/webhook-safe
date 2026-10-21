@@ -11,6 +11,11 @@ export function verifyShopifySignature(
   signatureHeader: string,
   options: ShopifySignatureOptions,
 ): void {
+  // Buffer's Base64 decoder ignores malformed characters. Require canonical
+  // SHA-256 Base64 rather than accepting decorated or truncated headers.
+  if (typeof signatureHeader !== "string" || !/^[A-Za-z0-9+/]{43}=$/.test(signatureHeader)) {
+    throw new WebhookSignatureError();
+  }
   const expectedSignature = createHmac("sha256", options.secret)
     .update(payload)
     .digest();
@@ -19,6 +24,7 @@ export function verifyShopifySignature(
 
   try {
     actualSignature = Buffer.from(signatureHeader, "base64");
+    if (actualSignature.toString("base64") !== signatureHeader) throw new WebhookSignatureError();
   } catch {
     throw new WebhookSignatureError();
   }
