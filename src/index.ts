@@ -17,6 +17,7 @@ export { isWebhookEvent } from "./validation.js";
 export { WebhookError, WebhookSignatureError } from "./errors.js";
 
 export { verifyHmacSignature } from "./signature.js";
+export type { SigningSecretRotationOptions } from "./signing-secrets.js";
 
 export { verifyStripeSignature } from "./stripe.js";
 

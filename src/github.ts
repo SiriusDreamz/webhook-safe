@@ -1,6 +1,7 @@
 import { verifyHmacSignature } from "./signature.js";
+import type { SigningSecretRotationOptions } from "./signing-secrets.js";
 
-export interface GitHubSignatureOptions {
+export interface GitHubSignatureOptions extends SigningSecretRotationOptions {
   secret: string;
 }
 
@@ -13,5 +14,5 @@ export function verifyGitHubSignature(
     throw new Error("GitHub webhook signature must use sha256");
   }
 
-  verifyHmacSignature(payload, signatureHeader, options.secret);
+  verifyHmacSignature(payload, signatureHeader, options.secret, options);
 }

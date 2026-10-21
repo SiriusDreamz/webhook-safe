@@ -1,3 +1,4 @@
+import type { SigningSecretRotationOptions } from "./signing-secrets.js";
 import { verifyShopifySignature } from "./shopify.js";
 
 export interface ShopifyWebhookEvent<T = unknown> {
@@ -6,7 +7,7 @@ export interface ShopifyWebhookEvent<T = unknown> {
   payload: T;
 }
 
-export interface ParseShopifyWebhookOptions {
+export interface ParseShopifyWebhookOptions extends SigningSecretRotationOptions {
   secret: string;
   topic: string;
   webhookId: string;
@@ -19,6 +20,7 @@ export function parseShopifyWebhook<T = unknown>(
 ): ShopifyWebhookEvent<T> {
   verifyShopifySignature(payload, signatureHeader, {
     secret: options.secret,
+    previousSecrets: options.previousSecrets,
   });
 
   if (typeof options.topic !== "string" || options.topic.trim().length === 0) {

@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+## 0.8.0 — 2026-10-21
+
+### Added
+
+- Optional signing-secret rotation for generic HMAC, Stripe, GitHub, Shopify and
+  Slack verification and provider event parsers. Keep the existing current secret
+  and accept up to two explicitly configured previous secrets during overlap.
+- Reject oversized, empty, duplicate or malformed previous-secret configuration
+  with a fixed error. Evaluate every configured key without returning its index.
+- Preserve exact bytes, provider timestamp/signature checks, parser identity and
+  existing single-secret calls. Rotation does not extend replay tolerance.
+- Add usage/example guidance and all-provider overlap/removal/tamper/parser and
+  duplicate-identity regression coverage.
+
+The application removes previous secrets after its overlap window. This package
+adds no secret storage, automatic expiration or provider-side key rotation.
+Publication requires owner approval and the matching v0.8.0 tag. Cloud management
+and encrypted secret storage remain a separate future feature.
+
 ## 0.7.4 — 2026-10-21
 
 ### Fixed

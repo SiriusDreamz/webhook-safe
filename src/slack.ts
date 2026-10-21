@@ -1,7 +1,8 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { WebhookSignatureError } from "./errors.js";
+import { signingSecrets, type SigningSecretRotationOptions } from "./signing-secrets.js";
 
-export interface SlackSignatureOptions {
+export interface SlackSignatureOptions extends SigningSecretRotationOptions {
   secret: string;
   timestamp: string;
   /** Timestamp tolerance in seconds, between 0 and 300. Defaults to 300. */
@@ -26,6 +27,7 @@ export function verifySlackSignature(
   if (!Number.isFinite(now) || now < 0) {
     throw new Error("Slack now must be a finite non-negative timestamp");
   }
+  const secrets = signingSecrets(options.secret, options);
   if (typeof options.timestamp !== "string" || !/^(0|[1-9][0-9]{0,15})$/.test(options.timestamp)
       || !Number.isSafeInteger(Number(options.timestamp))
       || Math.abs(now / 1000 - Number(options.timestamp)) > tolerance
@@ -33,8 +35,13 @@ export function verifySlackSignature(
     throw new WebhookSignatureError();
   }
   // Preserve Buffer bytes: decoding and re-encoding can alter signed data.
-  const expected = createHmac("sha256", options.secret)
-    .update(`v0:${options.timestamp}:`).update(payload).digest();
   const actual = Buffer.from(signatureHeader.slice(3), "hex");
-  if (!timingSafeEqual(actual, expected)) throw new WebhookSignatureError();
+  let valid = false;
+  for (const candidate of secrets) {
+    const expected = createHmac("sha256", candidate)
+      .update(`v0:${options.timestamp}:`).update(payload).digest();
+    const matched = timingSafeEqual(actual, expected);
+    valid = matched || valid;
+  }
+  if (!valid) throw new WebhookSignatureError();
 }

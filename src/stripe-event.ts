@@ -1,3 +1,4 @@
+import type { SigningSecretRotationOptions } from "./signing-secrets.js";
 import { verifyStripeSignature } from "./stripe.js";
 
 export interface StripeWebhookEvent<T = unknown> {
@@ -9,7 +10,7 @@ export interface StripeWebhookEvent<T = unknown> {
   };
 }
 
-export interface ParseStripeWebhookOptions {
+export interface ParseStripeWebhookOptions extends SigningSecretRotationOptions {
   secret: string;
   toleranceSeconds?: number;
   now?: number;
