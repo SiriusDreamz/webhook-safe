@@ -2,7 +2,7 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import { WebhookSignatureError } from "./errors.js";
 
 export function verifyHmacSignature(
-  payload: string,
+  payload: string | Buffer,
   signature: string,
   secret: string,
 ): void {

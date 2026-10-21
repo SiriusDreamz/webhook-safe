@@ -13,9 +13,5 @@ export function verifyGitHubSignature(
     throw new Error("GitHub webhook signature must use sha256");
   }
 
-  const payloadString = Buffer.isBuffer(payload)
-    ? payload.toString("utf8")
-    : payload;
-
-  verifyHmacSignature(payloadString, signatureHeader, options.secret);
+  verifyHmacSignature(payload, signatureHeader, options.secret);
 }

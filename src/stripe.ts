@@ -13,13 +13,6 @@ export function verifyStripeSignature(
   signatureHeader: string,
   options: StripeSignatureOptions,
 ): boolean {
-  const timestamp = getStripeTimestamp(signatureHeader);
-  const signatures = getStripeV1Signatures(signatureHeader);
-
-  if (timestamp === null || signatures.length === 0) {
-    return false;
-  }
-
   const toleranceSeconds =
     options.toleranceSeconds ?? DEFAULT_TOLERANCE_SECONDS;
 
@@ -28,20 +21,23 @@ export function verifyStripeSignature(
   }
 
   const now = options.now ?? Date.now();
+  if (!Number.isFinite(now) || now < 0) {
+    throw new Error("now must be a finite non-negative timestamp");
+  }
+  if (typeof options.secret !== "string" || options.secret.length === 0) {
+    throw new Error("Stripe signing secret is required");
+  }
+  const timestamp = getStripeTimestamp(signatureHeader);
+  const signatures = getStripeV1Signatures(signatureHeader);
+  if (timestamp === null || signatures.length === 0) return false;
   const ageSeconds = Math.abs(now / 1000 - timestamp);
 
   if (ageSeconds > toleranceSeconds) {
     return false;
   }
 
-  const payloadString = Buffer.isBuffer(payload)
-    ? payload.toString("utf8")
-    : payload;
-
-  const signedPayload = `${timestamp}.${payloadString}`;
-
   const expectedSignature = createHmac("sha256", options.secret)
-    .update(signedPayload)
+    .update(`${timestamp}.`).update(payload)
     .digest("hex");
 
   return signatures.some((signature) =>
@@ -50,31 +46,37 @@ export function verifyStripeSignature(
 }
 
 function getStripeTimestamp(signatureHeader: string): number | null {
+  if (typeof signatureHeader !== "string") return null;
   const parts = signatureHeader.split(",");
-
+  let timestamp: number | null = null;
   for (const part of parts) {
-    const [key, value] = part.split("=", 2);
+    const [key, ...values] = part.split("=");
+    const value = values.join("=");
 
-    if (key?.trim() === "t" && value) {
-      const timestamp = Number(value.trim());
-
-      return Number.isFinite(timestamp) ? timestamp : null;
+    if (key?.trim() === "t") {
+      if (timestamp !== null || !value || !/^(0|[1-9][0-9]{0,15})$/.test(value.trim())
+          || !Number.isSafeInteger(Number(value.trim()))) return null;
+      timestamp = Number(value.trim());
     }
   }
 
-  return null;
+  return timestamp;
 }
 
 function getStripeV1Signatures(signatureHeader: string): string[] {
+  if (typeof signatureHeader !== "string") return [];
   return signatureHeader
     .split(",")
-    .map((part) => part.split("=", 2))
+    .map((part) => {
+      const [key, ...values] = part.split("=");
+      return [key, values.join("=")];
+    })
     .filter(([key, value]) => key?.trim() === "v1" && value)
     .map(([, value]) => value!.trim());
 }
 
 function safeEqualHex(actual: string, expected: string): boolean {
-  if (!/^[0-9a-fA-F]+$/.test(actual)) {
+  if (!/^[0-9a-fA-F]{64}$/.test(actual)) {
     return false;
   }
 

@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+## 0.7.4 — 2026-10-21
+
+### Fixed
+
+- Release processing claims when application handlers throw synchronously.
+- Drain active lease renewals before completion/release; reject lost ownership
+  rather than allowing a late handler completion. Preserve processing and release
+  failures together as an AggregateError with the original failure as its cause.
+- Preserve original Buffer bytes in generic, GitHub and Stripe signature checks.
+- Reject malformed/ambiguous Stripe timestamps, non-finite clocks, empty signing
+  secrets and malformed signature lengths; retain multiple-v1 support.
+- Require canonical SHA-256 Base64 signatures for Shopify instead of accepting
+  decorated headers through Node's permissive Base64 decoder.
+
+Publication requires the matching v0.7.4 tag and owner approval. Cloud adoption is
+separate; this release does not change hosted ingestion, delivery or retention.
+
 ## 0.7.3 — 2026-10-18
 
 ### Documentation
