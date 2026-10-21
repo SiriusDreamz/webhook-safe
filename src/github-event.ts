@@ -1,3 +1,4 @@
+import type { SigningSecretRotationOptions } from "./signing-secrets.js";
 import { verifyGitHubSignature } from "./github.js";
 
 export interface GitHubWebhookEvent<T = unknown> {
@@ -6,7 +7,7 @@ export interface GitHubWebhookEvent<T = unknown> {
   payload: T;
 }
 
-export interface ParseGitHubWebhookOptions {
+export interface ParseGitHubWebhookOptions extends SigningSecretRotationOptions {
   secret: string;
   event: string;
   deliveryId: string;
@@ -19,6 +20,7 @@ export function parseGitHubWebhook<T = unknown>(
 ): GitHubWebhookEvent<T> {
   verifyGitHubSignature(payload, signatureHeader, {
     secret: options.secret,
+    previousSecrets: options.previousSecrets,
   });
 
   if (typeof options.event !== "string" || options.event.trim().length === 0) {

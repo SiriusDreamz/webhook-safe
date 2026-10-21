@@ -547,6 +547,55 @@ See the [durable queue example](https://github.com/SiriusDreamz/webhook-safe/blo
 and [Slack setup and troubleshooting](https://github.com/SiriusDreamz/webhook-safe/blob/master/examples/slack.md)
 for HTTP configuration, challenge responses and retry handling.
 
+## Signing-secret rotation (0.8.0 release preparation)
+
+This API is prepared for **0.8.0**. It is not available in the published 0.7.4
+release; publish/install 0.8.0 before using these options.
+
+Keep `secret` as the current signing key and provide up to two older keys in
+`previousSecrets` while your provider's deliveries transition:
+
+```ts
+const event = parseStripeWebhook(rawBody, stripeSignatureHeader, {
+  secret: currentSecret,
+  previousSecrets: [previousSecret],
+});
+```
+
+The same option is supported by Stripe, GitHub, Shopify and Slack verification
+and parsing helpers. Generic HMAC takes it as an optional fourth argument:
+
+```ts
+verifyHmacSignature(rawBody, signatureHeader, currentSecret, {
+  previousSecrets: [previousSecret],
+});
+```
+
+Existing calls with one secret retain their behavior. An omitted or empty list
+uses only the current secret. Lists must contain at most two distinct nonempty
+strings, different from the current secret; when rotation is configured, the
+current secret must also be nonempty. Invalid configuration throws a fixed error
+without including key values. All configured keys are evaluated, and verification
+returns the usual success/failure result without identifying the matching key.
+This is not a general constant-time execution guarantee.
+
+**You control the overlap window.** Keep it short and deliberate: load the new key
+and the previous key, follow your provider's supported rotation procedure, then
+remove the previous key once the intended transition has finished. Removing it
+stops accepting signatures made with it. The library does not change provider
+settings, store secrets, schedule expiration or decide an appropriate retention
+period. Never commit actual keys, log them or send them to a browser.
+
+Stripe/Slack timestamp tolerances still apply to every key; adding old keys does
+not permit stale deliveries. All other provider signature-format and raw-byte
+checks remain in force. Rotation does not add timestamp protection to providers
+that lack it. Use the same signed event/delivery identity for deduplication across
+both keys, rather than a signature or the key that accepted it.
+
+See [the processing example](examples/secret-rotation.ts). Webhook Safe Cloud's
+secret-management controls are separate; this library feature does not activate
+rotation in the hosted service.
+
 ## Processing leases
 
 Each processing claim has a lease.

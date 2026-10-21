@@ -1,6 +1,7 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
+import { signingSecrets, type SigningSecretRotationOptions } from "./signing-secrets.js";
 
-export interface StripeSignatureOptions {
+export interface StripeSignatureOptions extends SigningSecretRotationOptions {
   secret: string;
   toleranceSeconds?: number;
   now?: number;
@@ -27,6 +28,7 @@ export function verifyStripeSignature(
   if (typeof options.secret !== "string" || options.secret.length === 0) {
     throw new Error("Stripe signing secret is required");
   }
+  const secrets = signingSecrets(options.secret, options);
   const timestamp = getStripeTimestamp(signatureHeader);
   const signatures = getStripeV1Signatures(signatureHeader);
   if (timestamp === null || signatures.length === 0) return false;
@@ -36,13 +38,14 @@ export function verifyStripeSignature(
     return false;
   }
 
-  const expectedSignature = createHmac("sha256", options.secret)
-    .update(`${timestamp}.`).update(payload)
-    .digest("hex");
-
-  return signatures.some((signature) =>
-    safeEqualHex(signature, expectedSignature),
-  );
+  let valid = false;
+  for (const candidate of secrets) {
+    const expectedSignature = createHmac("sha256", candidate)
+      .update(`${timestamp}.`).update(payload).digest("hex");
+    const matched = signatures.some(signature => safeEqualHex(signature, expectedSignature));
+    valid = matched || valid;
+  }
+  return valid;
 }
 
 function getStripeTimestamp(signatureHeader: string): number | null {
