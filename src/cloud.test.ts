@@ -41,7 +41,8 @@ describe("Cloud delivery verification", () => {
     expect(() => verifyCloudSignature(body, vector.signature, { ...options, deliveryId })).toThrow(WebhookSignatureError);
   });
   it.each(["", "v2=" + "a".repeat(64), "v1=invalid", vector.signature + "a", vector.signature + "=extra",
-    vector.signature + ",t=123", Array(4).fill(vector.signature).join(","), vector.signature.toUpperCase()])("rejects malformed signatures", header => {
+    vector.signature + ",t=123", vector.signature + "\n", vector.signature + "\r", vector.signature + "\u2028",
+    " " + vector.signature, Array(4).fill(vector.signature).join(","), vector.signature.toUpperCase()])("rejects malformed signatures", header => {
     expect(() => verifyCloudSignature(body, header, options)).toThrow(WebhookSignatureError);
   });
   it.each([NaN, Infinity, -1])("rejects invalid clocks %s", now => {

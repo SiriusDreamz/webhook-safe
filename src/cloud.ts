@@ -31,11 +31,13 @@ export function verifyCloudSignature(
     throw new Error("Cloud toleranceSeconds must be between 0 and 300");
   if (!Number.isFinite(now) || now < 0)
     throw new Error("Cloud now must be a finite non-negative timestamp");
-  if (typeof options.deliveryId !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(options.deliveryId)
+  if (typeof options.deliveryId !== "string" || options.deliveryId.length !== 36 || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(options.deliveryId)
     || typeof options.timestamp !== "string" || !/^(0|[1-9][0-9]{0,15})$/.test(options.timestamp)
     || !Number.isSafeInteger(Number(options.timestamp))
+    || options.timestamp !== String(Number(options.timestamp))
     || Math.abs(now / 1000 - Number(options.timestamp)) > tolerance
     || typeof signatureHeader !== "string" || signatureHeader.length > 206
+    || signatureHeader !== signatureHeader.trim()
     || !/^v1=[0-9a-f]{64}(?:, ?v1=[0-9a-f]{64}){0,2}$/.test(signatureHeader)) {
     throw new WebhookSignatureError();
   }
