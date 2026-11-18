@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+## 0.9.0 — 2026-11-18
+
+### Added
+
+- Dependency-free verifyCloudSignature and CloudSignatureOptions exports for
+  exact-byte Cloud destination signatures, canonical event identity, bounded
+  multi-signature/key overlap, constant-time digest comparison and timestamp
+  checks (default and maximum tolerance: 300 seconds).
+- A tested Cloud receiver example authenticating before business work and
+  deduplicating retries by stable Cloud identity.
+- Shared Cloud/library binary signature vectors and malformed-header,
+  tampering, clock-boundary, rotation and duplicate-identity tests.
+
+Release preparation only: requires owner-approved v0.9.0 tag/publication.
+Cloud implementation/deployment and endpoint configuration remain separate;
+published 0.8.1 does not expose this API.
+
 ## 0.8.1 — 2026-11-18
 
 ### Fixed

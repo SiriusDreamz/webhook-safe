@@ -5,6 +5,8 @@ export type {
 } from "./idempotency.js";
 
 export { handleWebhook } from "./handler.js";
+export { verifyCloudSignature } from "./cloud.js";
+export type { CloudSignatureOptions } from "./cloud.js";
 
 export type { WebhookHandlerOptions } from "./handler.js";
 
