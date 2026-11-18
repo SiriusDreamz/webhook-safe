@@ -1108,9 +1108,9 @@ interface WebhookEvent {
 }
 ```
 
-### Completion acknowledgement (0.8.1 release preparation)
+### Completion acknowledgement (0.8.1+)
 
-In the prepared 0.8.1 release, MemoryStore, RedisStore and PostgresStore reject
+Since 0.8.1, MemoryStore, RedisStore and PostgresStore reject
 `setCompleted` with `WebhookError` when the processing claim is missing, expired,
 already completed or owned by another worker. `handleWebhook` propagates that
 failure instead of returning `"processed"`. Cleanup checks ownership and cannot
@@ -1123,7 +1123,7 @@ a success response blindly. Use idempotent downstream operations or a transactio
 that coordinates your business write with its event identity. Review the result
 before manually replaying or retrying a non-idempotent operation.
 
-This behavior is prepared for 0.8.1 and is not part of the published 0.8.0 package.
+This behavior requires 0.8.1 or later; it is not part of 0.8.0.
 
 ## Custom stores
 
@@ -1245,3 +1245,57 @@ Potential future additions include:
 ## License
 
 MIT
+
+
+## Cloud delivery verification (0.9.0 release preparation)
+
+`verifyCloudSignature` is prepared for 0.9.0; it is not exported by published
+0.8.1. Cloud delivery signing also requires its separate approved rollout and
+per-endpoint setup. Do not assume current hosted deliveries have these headers.
+
+After rollout, configure a separate random delivery signing key of at least 32
+bytes in your receiver and Cloud endpoint. Never reuse the provider signing key.
+The helper throws `WebhookSignatureError` for invalid signatures, timestamps or
+identities and returns void on success. Configuration errors throw Error.
+
+```ts
+import { verifyCloudSignature } from "webhook-safe";
+
+verifyCloudSignature(rawBody, signatureHeader, {
+  secret: deliverySigningSecret,
+  deliveryId: webhookSafeId,
+  timestamp: webhookSafeTimestamp,
+  // previousSecrets: [previousDeliverySigningSecret],
+});
+// Parse and validate your event only after successful verification.
+```
+
+Your HTTP adapter must bound the raw body and header sizes, require one
+`webhook-safe-id` and `webhook-safe-timestamp` value, and pass the combined
+`webhook-safe-signature` value unchanged. Preserve original Buffer bytes before
+JSON middleware. Duplicate identity/timestamp headers are rejected when joined;
+Cloud uses one signature header with up to two v1 candidates during overlap.
+The verifier bounds the signature header to at most three candidates and 206
+characters for compatibility with up to two configured previous verifier keys.
+
+The signed message is UTF-8 `v1\n{timestamp}\n{deliveryId}\n` followed by the
+original body bytes. HMAC-SHA256 lower-case hex candidates use `v1=<digest>`,
+comma separated. Identity is the canonical lower-case Cloud event UUID. The
+canonical Unix timestamp is in seconds. It is regenerated for each attempt;
+identity is retained across retries and manual replay. Content-Type, URL and
+other headers are not authenticated by this signature.
+
+The default tolerance is 300 seconds in either direction. `toleranceSeconds`
+may reduce it to 0–300; `now` is a finite non-negative clock in milliseconds,
+primarily for tests. Keep receiver clocks synchronized. Verification does not
+make a delivery new: deduplicate by the verified identity using a durable shared
+store and make downstream side effects idempotent. Normal replay retains the
+identity and will therefore remain a duplicate in your receiver unless you
+explicitly arrange safe business recovery. See the tested [receiver example](examples/cloud.ts).
+
+For key rotation, deploy receiver acceptance of the next key first. Cloud can
+sign with current and previous keys for up to 24 hours, then stops using the
+old key. Remove previous verifier keys after overlap and the timestamp/in-flight
+window have passed. Immediate revocation cannot retract signed requests already
+in flight. Secrets are accepted from application configuration, never stored,
+generated or automatically expired by this library.
