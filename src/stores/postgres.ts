@@ -1,6 +1,7 @@
 import type { Pool, PoolClient } from "pg";
 
 import { createClaimToken } from "../claim.js";
+import { WebhookError } from "../errors.js";
 import { validateCompletedTtlMs, validateLeaseMs } from "../lease.js";
 import type {
   EventStatus,
@@ -120,7 +121,7 @@ export class PostgresStore implements IdempotencyStore {
   }
 
   async setCompleted(key: string, claim: IdempotencyClaim): Promise<void> {
-    await this.client.query(
+    const result = await this.client.query(
       `
       UPDATE webhook_safe_events
       SET
@@ -135,5 +136,8 @@ export class PostgresStore implements IdempotencyStore {
       `,
       [key, claim.token, this.completedTtlMs],
     );
+    if (result.rowCount !== 1) {
+      throw new WebhookError("Webhook processing lease was lost before completion");
+    }
   }
 }

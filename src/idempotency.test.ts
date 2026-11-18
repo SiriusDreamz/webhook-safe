@@ -153,7 +153,9 @@ describe("MemoryStore", () => {
 
     expect(secondClaim).not.toBeNull();
 
-    await store.setCompleted("event_123", firstClaim!);
+    await expect(store.setCompleted("event_123", firstClaim!)).rejects.toThrow(
+      "Webhook processing lease was lost before completion",
+    );
 
     expect(await store.get("event_123")).toBe("processing");
   });

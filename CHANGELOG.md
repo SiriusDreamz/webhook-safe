@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+## 0.8.1 — 2026-11-18
+
+### Fixed
+
+- Reject unacknowledged completion in RedisStore and PostgresStore instead of
+  allowing handleWebhook to report processed after its claim expired or changed
+  owners. Keep the Promise<void> store interface and use WebhookError on failure.
+- Apply the same active-lease check in MemoryStore, including expiry without
+  takeover. Preserve owner-safe cleanup, heartbeat shutdown and original errors.
+- Test expiry, takeover, repeated completion and cleanup failures, including real
+  isolated Redis/PostgreSQL completion races in CI.
+
+### Documentation
+
+- Explain completion acknowledgement for custom stores and the risk of repeated
+  side effects after a handler succeeds but recording completion fails.
+- Update signing-secret rotation guidance to match the published 0.8.0 package.
+
+Release preparation only: publication requires owner approval and the matching
+v0.8.1 tag. This change does not update Cloud's installed dependency.
+
 ## 0.8.0 — 2026-10-21
 
 ### Added
