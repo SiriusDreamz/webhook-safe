@@ -1,5 +1,6 @@
 import type { RedisClientType } from "redis";
 import { createClaimToken } from "../claim.js";
+import { WebhookError } from "../errors.js";
 import { validateCompletedTtlMs, validateLeaseMs } from "../lease.js";
 import type {
   EventStatus,
@@ -25,7 +26,8 @@ return 0
 
 const COMPLETE_SCRIPT = `
 if redis.call("GET", KEYS[1]) == ARGV[1] then
-  return redis.call("SET", KEYS[1], "completed", "PX", ARGV[2])
+  redis.call("SET", KEYS[1], "completed", "PX", ARGV[2])
+  return 1
 end
 return 0
 `;
@@ -91,10 +93,13 @@ export class RedisStore implements IdempotencyStore {
   }
 
   async setCompleted(key: string, claim: IdempotencyClaim): Promise<void> {
-    await this.client.eval(COMPLETE_SCRIPT, {
+    const result = await this.client.eval(COMPLETE_SCRIPT, {
       keys: [this.key(key)],
       arguments: [claim.token, String(this.completedTtlMs)],
     });
+    if (result !== 1) {
+      throw new WebhookError("Webhook processing lease was lost before completion");
+    }
   }
 
   private key(key: string): string {

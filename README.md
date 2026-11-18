@@ -547,10 +547,10 @@ See the [durable queue example](https://github.com/SiriusDreamz/webhook-safe/blo
 and [Slack setup and troubleshooting](https://github.com/SiriusDreamz/webhook-safe/blob/master/examples/slack.md)
 for HTTP configuration, challenge responses and retry handling.
 
-## Signing-secret rotation (0.8.0 release preparation)
+## Signing-secret rotation (0.8.0+)
 
-This API is prepared for **0.8.0**. It is not available in the published 0.7.4
-release; publish/install 0.8.0 before using these options.
+Signing-secret rotation is available in **0.8.0 and later**. Install a compatible
+version before using these options.
 
 Keep `secret` as the current signing key and provide up to two older keys in
 `previousSecrets` while your provider's deliveries transition:
@@ -1108,6 +1108,23 @@ interface WebhookEvent {
 }
 ```
 
+### Completion acknowledgement (0.8.1 release preparation)
+
+In the prepared 0.8.1 release, MemoryStore, RedisStore and PostgresStore reject
+`setCompleted` with `WebhookError` when the processing claim is missing, expired,
+already completed or owned by another worker. `handleWebhook` propagates that
+failure instead of returning `"processed"`. Cleanup checks ownership and cannot
+release a replacement worker's claim. Store/network errors also propagate; a
+failed write can have an uncertain outcome.
+
+Your business handler may already have performed its side effects when completion
+fails. This error does not roll those effects back and must not be converted into
+a success response blindly. Use idempotent downstream operations or a transaction
+that coordinates your business write with its event identity. Review the result
+before manually replaying or retrying a non-idempotent operation.
+
+This behavior is prepared for 0.8.1 and is not part of the published 0.8.0 package.
+
 ## Custom stores
 
 You can implement your own persistence backend using the `IdempotencyStore` interface.
@@ -1144,12 +1161,17 @@ class CustomStore implements IdempotencyStore {
   }
 
   async setCompleted(key: string, claim: IdempotencyClaim): Promise<void> {
-    // Complete only if this claim still owns the event.
+    // Atomically complete only an active claim owned by this token.
+    // Throw if no completion was recorded; do not silently return.
   }
 }
 ```
 
 Custom stores should implement `claim`, `renew`, `release`, and `setCompleted` using atomic ownership checks where supported by the underlying datastore.
+`setCompleted` keeps its `Promise<void>` signature: resolve only after recording
+completion for an unexpired owned claim, and reject on an ownership/expiry miss
+or store error. `handleWebhook` relies on this acknowledgement; it cannot detect
+a custom store that silently skips a completion write.
 
 ## Security
 

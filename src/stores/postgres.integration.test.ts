@@ -1,3 +1,5 @@
+import { handleWebhook } from "../handler.js";
+import { WebhookError } from "../errors.js";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { Pool } from "pg";
 
@@ -85,9 +87,9 @@ describeWithPostgres("PostgresStore integration", () => {
 
     expect(claim).not.toBeNull();
 
-    await store.setCompleted("event_complete", {
+    await expect(store.setCompleted("event_complete", {
       token: "not-the-owner",
-    });
+    })).rejects.toBeInstanceOf(WebhookError);
 
     expect(await store.get("event_complete")).toBe("processing");
 
@@ -110,5 +112,52 @@ describeWithPostgres("PostgresStore integration", () => {
     expect(secondClaim).not.toBeNull();
 
     expect(secondClaim!.token).not.toBe(firstClaim!.token);
+  });
+
+  it("rejects completion after expiry without a replacement", async () => {
+    const key = "event_expired_completion";
+    const claim = await store.claim(key, 60_000);
+    expect(claim).not.toBeNull();
+    await pool.query(
+        "UPDATE webhook_safe_events SET expires_at = NOW() - INTERVAL '1 second' WHERE key = $1",
+        [key],
+      );
+    await expect(store.setCompleted(key, claim!)).rejects.toBeInstanceOf(WebhookError);
+    expect(await store.get(key)).toBeNull();
+  });
+
+  it("rejects repeated completion without changing the completed event", async () => {
+    const key = "event_repeated_completion";
+    const claim = await store.claim(key, 60_000);
+    await store.setCompleted(key, claim!);
+    await expect(store.setCompleted(key, claim!)).rejects.toBeInstanceOf(WebhookError);
+    expect(await store.get(key)).toBe("completed");
+  });
+
+  it("rejects a completion race and preserves the replacement through handler cleanup", async () => {
+    const key = "event_completion_takeover";
+    let replacement: Awaited<ReturnType<typeof store.claim>> = null;
+    const wrapper = {
+      get: store.get.bind(store),
+      claim: store.claim.bind(store),
+      renew: store.renew.bind(store),
+      release: store.release.bind(store),
+      setCompleted: async (eventKey: string, claim: { token: string }) => {
+        await pool.query(
+        "UPDATE webhook_safe_events SET expires_at = NOW() - INTERVAL '1 second' WHERE key = $1",
+        [key],
+      );
+        replacement = await store.claim(key, 60_000);
+        expect(replacement).not.toBeNull();
+        return store.setCompleted(eventKey, claim);
+      },
+    };
+    await expect(handleWebhook(key, {
+      store: wrapper, getKey: value => value, handler: async () => {},
+    })).rejects.toBeInstanceOf(WebhookError);
+    expect(await store.get(key)).toBe("processing");
+    // Old completion and handleWebhook's release must not remove the new owner.
+    await store.setCompleted(key, replacement!);
+    expect(await store.get(key)).toBe("completed");
   });
 });

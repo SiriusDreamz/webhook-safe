@@ -35,6 +35,8 @@ export interface IdempotencyStore {
 
   /**
    * Marks an event completed only if the supplied claim still owns it.
+   * Reject if the claim expired, was replaced, or completion was not recorded.
+   * Resolving this promise acknowledges successful completion to handleWebhook.
    */
   setCompleted(key: string, claim: IdempotencyClaim): Promise<void>;
 }

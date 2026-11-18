@@ -309,7 +309,9 @@ describe("handleWebhook", () => {
     expect(secondClaim).not.toBeNull();
     expect(secondClaim?.token).not.toBe(firstClaim?.token);
 
-    await store.setCompleted("event_123", firstClaim!);
+    await expect(store.setCompleted("event_123", firstClaim!)).rejects.toThrow(
+      "Webhook processing lease was lost before completion",
+    );
 
     expect(await store.get("event_123")).toBe("processing");
 

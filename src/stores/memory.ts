@@ -1,4 +1,5 @@
 import { createClaimToken } from "../claim.js";
+import { WebhookError } from "../errors.js";
 import type {
   EventStatus,
   IdempotencyClaim,
@@ -99,8 +100,14 @@ export class MemoryStore implements IdempotencyStore {
   async setCompleted(key: string, claim: IdempotencyClaim): Promise<void> {
     const existing = this.events.get(key);
 
-    if (existing?.claimToken !== claim.token) {
-      return;
+    if (
+      !existing ||
+      existing.status !== "processing" ||
+      existing.claimToken !== claim.token ||
+      existing.expiresAt === null ||
+      existing.expiresAt <= Date.now()
+    ) {
+      throw new WebhookError("Webhook processing lease was lost before completion");
     }
 
     this.events.set(key, {
