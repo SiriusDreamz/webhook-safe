@@ -2,9 +2,14 @@
 
 Webhook signature verification and idempotent processing for Node.js and TypeScript.
 
-Verify Stripe, GitHub, Shopify, Slack Events API and generic HMAC webhooks, then
-coordinate duplicate-event processing with in-memory, Redis or PostgreSQL stores.
-The library is framework agnostic; preserve raw request bytes in your HTTP adapter.
+Verify Stripe, GitHub, Shopify, Slack Events API, Standard Webhooks, Paddle Billing,
+Lemon Squeezy and generic HMAC webhooks, then coordinate duplicate-event processing
+with in-memory, Redis or PostgreSQL stores. The library is framework agnostic;
+preserve raw request bytes in your HTTP adapter.
+
+Standard Webhooks, Paddle Billing and Lemon Squeezy verification is included in
+this source tree and documented below. It is listed under Unreleased and is not
+exported by the published npm package until a release is prepared.
 
 For managed webhook delivery, retries and event inspection, visit
 [Webhook Safe Cloud](https://www.webhook-safe.com).
@@ -12,6 +17,8 @@ For managed webhook delivery, retries and event inspection, visit
 **Guides:** [Installation](#installation) · [Basic usage](#basic-usage) ·
 [Stripe](#stripe-webhooks) · [GitHub](#github-webhooks) ·
 [Shopify](#shopify-webhooks) · [Slack](#slack-events-api) ·
+[Standard Webhooks](#standard-webhooks) · [Paddle](#paddle-billing) ·
+[Lemon Squeezy](#lemon-squeezy) ·
 [Stores](#stores) · [API](#api) · [Security](#security)
 
 See the [version history](CHANGELOG.md) for new features and release status.
@@ -37,6 +44,9 @@ See the [version history](CHANGELOG.md) for new features and release status.
 - Shopify webhook ID support for idempotency
 - Slack request signature verification with a five-minute timestamp window
 - Slack Events API callback parsing and signed URL-verification challenges
+- Standard Webhooks v1 HMAC-SHA256 verification, including Svix `svix-*` header values
+- Paddle Billing `Paddle-Signature` verification with a replay window
+- Lemon Squeezy `X-Signature` HMAC-SHA256 verification
 - Generic HMAC-SHA256 signature verification
 - Supports raw hexadecimal and `sha256=<hex>` signatures
 - Timing-safe signature comparison
@@ -547,6 +557,452 @@ See the [durable queue example](https://github.com/SiriusDreamz/webhook-safe/blo
 and [Slack setup and troubleshooting](https://github.com/SiriusDreamz/webhook-safe/blob/master/examples/slack.md)
 for HTTP configuration, challenge responses and retry handling.
 
+## Standard Webhooks
+
+`webhook-safe` verifies [Standard Webhooks](https://github.com/standard-webhooks/standard-webhooks/blob/main/spec/standard-webhooks.md) v1 signatures. The same values are used by Svix-based senders. Svix documents `svix-id`, `svix-timestamp` and `svix-signature` as aliases of `webhook-id`, `webhook-timestamp` and `webhook-signature`.
+
+There is no separate package to install. The verifier is exported from `webhook-safe` and does not depend on Express, Next.js or a provider SDK.
+
+The signed content is `webhook-id`, a full stop, the Unix timestamp, a full stop, and the raw body bytes. The HMAC key is the base64-decoded secret, not the `whsec_` prefix. The signature header is a space-separated list of versioned signatures. This verifier checks `v1,<base64>` HMAC-SHA256 signatures. Other versions in that list, including `v2a`, are ignored. A header with no matching `v1` signature fails.
+
+Pass one complete header set. Do not mix `webhook-id` from one request with `svix-signature` from another.
+
+### Raw body
+
+Preserve the exact request bytes. Parsing JSON and serializing it again changes the signed content.
+
+```ts
+import { verifyStandardWebhookSignature } from "webhook-safe";
+
+verifyStandardWebhookSignature(rawBody, signatureHeader, {
+  secret: process.env.STANDARD_WEBHOOKS_SECRET!,
+  id: webhookId,
+  timestamp: webhookTimestamp,
+});
+```
+
+`rawBody` is a `string` or `Buffer`. Pass the original `Buffer` when the HTTP adapter gives you bytes.
+
+### Express
+
+Mount a raw parser for this route only. Do not use `express.json()` before verification.
+
+```ts
+import express from "express";
+import { verifyStandardWebhookSignature, WebhookSignatureError } from "webhook-safe";
+
+const app = express();
+
+app.post(
+  "/webhooks/standard",
+  express.raw({ type: "application/json" }),
+  (req, res) => {
+    const standardHeaders = req.header("webhook-id") !== undefined
+      || req.header("webhook-timestamp") !== undefined
+      || req.header("webhook-signature") !== undefined;
+    const signature = standardHeaders
+      ? req.header("webhook-signature") ?? ""
+      : req.header("svix-signature") ?? "";
+    try {
+      verifyStandardWebhookSignature(req.body, signature, {
+        secret: process.env.STANDARD_WEBHOOKS_SECRET!,
+        id: standardHeaders
+          ? req.header("webhook-id") ?? ""
+          : req.header("svix-id") ?? "",
+        timestamp: standardHeaders
+          ? req.header("webhook-timestamp") ?? ""
+          : req.header("svix-timestamp") ?? "",
+      });
+    } catch (error) {
+      if (error instanceof WebhookSignatureError) {
+        res.status(401).send("Invalid signature");
+        return;
+      }
+      throw error;
+    }
+
+    const event = JSON.parse(req.body.toString("utf8"));
+    res.status(200).json({ received: event });
+  },
+);
+```
+
+`req.body` is a `Buffer` when `express.raw()` is used. `webhook-safe` does not ship an Express adapter.
+
+### Next.js
+
+Read the body once, as bytes, in the route handler.
+
+```ts
+import { verifyStandardWebhookSignature, WebhookSignatureError } from "webhook-safe";
+
+export async function POST(request: Request) {
+  const rawBody = Buffer.from(await request.arrayBuffer());
+  const standardHeaders =
+    request.headers.get("webhook-id") !== null ||
+    request.headers.get("webhook-timestamp") !== null ||
+    request.headers.get("webhook-signature") !== null;
+  const signature = standardHeaders
+    ? request.headers.get("webhook-signature") ?? ""
+    : request.headers.get("svix-signature") ?? "";
+
+  try {
+    verifyStandardWebhookSignature(rawBody, signature, {
+      secret: process.env.STANDARD_WEBHOOKS_SECRET!,
+      id: standardHeaders
+        ? request.headers.get("webhook-id") ?? ""
+        : request.headers.get("svix-id") ?? "",
+      timestamp: standardHeaders
+        ? request.headers.get("webhook-timestamp") ?? ""
+        : request.headers.get("svix-timestamp") ?? "",
+    });
+  } catch (error) {
+    if (error instanceof WebhookSignatureError) {
+      return new Response("Invalid signature", { status: 401 });
+    }
+    throw error;
+  }
+
+  const event = JSON.parse(rawBody.toString("utf8"));
+  return Response.json({ received: event });
+}
+```
+
+`request.text()` is the UTF-8 decoding of those bytes. It verifies when the signed body is that same Unicode string. Prefer `arrayBuffer()` when you need the original bytes.
+
+### Options
+
+```ts
+interface StandardWebhookSignatureOptions {
+  secret: string;
+  id: string;
+  timestamp: string;
+  toleranceSeconds?: number;
+  now?: number;
+  previousSecrets?: readonly string[];
+}
+```
+
+- `secret` — `whsec_` plus standard base64, or the same base64 without the prefix
+- `id` — `webhook-id` or `svix-id`
+- `timestamp` — `webhook-timestamp` or `svix-timestamp`, Unix seconds
+- `toleranceSeconds` — optional whole-second skew; defaults to 300
+- `now` — optional current time in milliseconds, primarily for tests
+- `previousSecrets` — optional previous secrets, at most two
+
+The tolerance compares whole seconds: the absolute difference between `timestamp` and `Math.floor(now / 1000)` must be less than or equal to `toleranceSeconds`. The default matches the reference libraries' five-minute window. Timestamps that far in the past or the future are rejected. Message ids that contain `.` or whitespace are rejected.
+
+### Error handling
+
+A valid signature returns normally.
+
+`WebhookSignatureError` means the signature, timestamp, id or header is unacceptable. That includes a missing header, a malformed `v1` value, a tampered body, the wrong secret, and an expired or future timestamp.
+
+`Error` means the call is misconfigured: an empty secret, a secret that is not canonical base64, a non-finite or negative `toleranceSeconds` or `now`, or an invalid `previousSecrets` list. Those errors are thrown before the signature is treated as a simple mismatch.
+
+```ts
+import { WebhookSignatureError } from "webhook-safe";
+
+try {
+  verifyStandardWebhookSignature(rawBody, signatureHeader, options);
+} catch (error) {
+  if (error instanceof WebhookSignatureError) {
+    // Reject the request.
+  } else {
+    // Fix the server configuration.
+    throw error;
+  }
+}
+```
+
+### Secret format and rotation
+
+The specification serializes symmetric secrets as standard base64 prefixed with `whsec_`. The prefix identifies the key. The HMAC key is the decoded bytes. The reference libraries also accept the base64 portion alone, and this verifier does too. Empty keys and non-canonical base64 are rejected. The specification recommends 24 to 64 decoded bytes. This function does not enforce that range.
+
+The `webhook-signature` header can contain more than one space-separated signature so a sender can rotate keys without downtime. Verification accepts the header when any `v1` signature matches the current secret or a configured previous secret.
+
+```ts
+verifyStandardWebhookSignature(rawBody, signatureHeader, {
+  secret: currentSecret,
+  previousSecrets: [previousSecret],
+  id: webhookId,
+  timestamp: webhookTimestamp,
+});
+```
+
+Remove `previousSecrets` after the overlap window. The library does not store secrets or rotate them at the sender. See [Signing-secret rotation](#signing-secret-rotation-080).
+
+Use `webhook-id` with `handleWebhook`. The specification keeps that id the same when a delivery is retried.
+
+## Paddle Billing
+
+`webhook-safe` verifies [Paddle Billing](https://developer.paddle.com/webhooks/about/signature-verification) `Paddle-Signature` headers. There is no separate package to install, and the verifier does not use the Paddle SDK.
+
+Paddle concatenates the `ts` value, a colon, and the raw request body, then computes HMAC-SHA256 with the notification destination secret key. The header contains `ts` and at least one `h1`. Paddle's documentation says that during secret rotation more than one `h1` is returned. The hex digest is lowercase in Paddle's examples and SDK comparison.
+
+### Raw body
+
+Do not parse or reformat the body before verification. Whitespace changes the digest.
+
+```ts
+import { verifyPaddleSignature } from "webhook-safe";
+
+verifyPaddleSignature(rawBody, paddleSignatureHeader, {
+  secret: process.env.PADDLE_WEBHOOK_SECRET!,
+});
+```
+
+### Express
+
+```ts
+import express from "express";
+import { verifyPaddleSignature, WebhookSignatureError } from "webhook-safe";
+
+const app = express();
+
+app.post(
+  "/webhooks/paddle",
+  express.raw({ type: "application/json" }),
+  (req, res) => {
+    try {
+      verifyPaddleSignature(req.body, req.header("paddle-signature") ?? "", {
+        secret: process.env.PADDLE_WEBHOOK_SECRET!,
+      });
+    } catch (error) {
+      if (error instanceof WebhookSignatureError) {
+        res.status(401).send("Invalid signature");
+        return;
+      }
+      throw error;
+    }
+
+    const event = JSON.parse(req.body.toString("utf8")) as { event_id: string };
+    res.status(200).json({ received: event.event_id });
+  },
+);
+```
+
+`express.raw()` keeps `req.body` as a `Buffer`. `webhook-safe` does not depend on Express.
+
+### Next.js
+
+```ts
+import { verifyPaddleSignature, WebhookSignatureError } from "webhook-safe";
+
+export async function POST(request: Request) {
+  const rawBody = Buffer.from(await request.arrayBuffer());
+
+  try {
+    verifyPaddleSignature(rawBody, request.headers.get("paddle-signature") ?? "", {
+      secret: process.env.PADDLE_WEBHOOK_SECRET!,
+    });
+  } catch (error) {
+    if (error instanceof WebhookSignatureError) {
+      return new Response("Invalid signature", { status: 401 });
+    }
+    throw error;
+  }
+
+  const event = JSON.parse(rawBody.toString("utf8")) as {
+    event_id: string;
+    event_type: string;
+  };
+  return Response.json({ received: event.event_id, type: event.event_type });
+}
+```
+
+Paddle documents `event_id` as the id to use when a notification is delivered more than once. `notification_id` identifies the delivery attempt. Read both from the verified JSON, not from an unsigned header.
+
+### Options
+
+```ts
+interface PaddleSignatureOptions {
+  secret: string;
+  toleranceSeconds?: number;
+  now?: number;
+  previousSecrets?: readonly string[];
+}
+```
+
+- `secret` — notification destination secret key
+- `toleranceSeconds` — optional absolute skew in seconds; defaults to 5
+- `now` — optional current time in milliseconds, primarily for tests
+- `previousSecrets` — optional previous secret keys, at most two
+
+The default window matches Paddle's SDK: the absolute difference between `now` and `ts` in milliseconds must be less than or equal to five seconds. Older and future timestamps are rejected. Exactly five seconds of skew is accepted. A larger `toleranceSeconds` widens that window.
+
+The header must contain one canonical Unix `ts` and one or more lowercase 64-character `h1` values, separated by semicolons. `ts=1671552777;h1=<hex>` is the documented shape. A second `h1` is accepted when one of them matches.
+
+### Error handling
+
+A valid signature returns normally. `WebhookSignatureError` covers a missing or malformed header, a tampered body, the wrong secret, and a timestamp outside the replay window. An empty secret, an invalid tolerance or clock, or an invalid `previousSecrets` list throws `Error`.
+
+```ts
+import { WebhookSignatureError } from "webhook-safe";
+
+try {
+  verifyPaddleSignature(rawBody, paddleSignatureHeader, {
+    secret: process.env.PADDLE_WEBHOOK_SECRET!,
+  });
+} catch (error) {
+  if (error instanceof WebhookSignatureError) {
+    // Reject the request.
+  } else {
+    throw error;
+  }
+}
+```
+
+### Secret format and rotation
+
+The endpoint secret key is an opaque string. Paddle's manual example uses that string directly as the HMAC key. This verifier does not base64-decode it.
+
+Paddle documents multiple `h1` values while secrets are rotated. Each `h1` must be a 64-character lowercase hex digest, and any one that matches a configured secret is enough. `previousSecrets` also accepts a delivery signed only with a previous key you still hold:
+
+```ts
+verifyPaddleSignature(rawBody, paddleSignatureHeader, {
+  secret: currentSecret,
+  previousSecrets: [previousSecret],
+});
+```
+
+Remove the previous key when the overlap ends. This package does not change the destination secret in Paddle.
+
+## Lemon Squeezy
+
+`webhook-safe` verifies [Lemon Squeezy](https://docs.lemonsqueezy.com/help/webhooks/signing-requests) `X-Signature` headers. There is no separate package to install.
+
+Lemon Squeezy signs the raw body with HMAC-SHA256 and sends the lowercase hex digest in `X-Signature`. The documented Node example compares that hex string in constant time. There is no timestamp in the signature.
+
+The request also includes `X-Event-Name`. That header is not part of the HMAC. After verification, read `meta.event_name` from the JSON body. The [webhook request](https://docs.lemonsqueezy.com/help/webhooks/webhook-requests) example includes `meta.event_name` and `data.id`.
+
+### Raw body
+
+Hash the bytes Lemon Squeezy sent. Do not re-serialize the JSON.
+
+```ts
+import { verifyLemonSqueezySignature } from "webhook-safe";
+
+verifyLemonSqueezySignature(rawBody, requestSignature, {
+  secret: process.env.LEMONSQUEEZY_WEBHOOK_SECRET!,
+});
+```
+
+### Express
+
+```ts
+import express from "express";
+import { verifyLemonSqueezySignature, WebhookSignatureError } from "webhook-safe";
+
+const app = express();
+
+app.post(
+  "/webhooks/lemonsqueezy",
+  express.raw({ type: "application/json" }),
+  (req, res) => {
+    try {
+      verifyLemonSqueezySignature(req.body, req.header("x-signature") ?? "", {
+        secret: process.env.LEMONSQUEEZY_WEBHOOK_SECRET!,
+      });
+    } catch (error) {
+      if (error instanceof WebhookSignatureError) {
+        res.status(401).send("Invalid signature");
+        return;
+      }
+      throw error;
+    }
+
+    const event = JSON.parse(req.body.toString("utf8")) as {
+      meta: { event_name: string };
+      data: { id: string };
+    };
+    res.status(200).json({ received: event.data.id, type: event.meta.event_name });
+  },
+);
+```
+
+Lemon Squeezy retries a delivery that does not respond with HTTP 200. Acknowledge after the signature check, and make the work idempotent. `webhook-safe` does not depend on Express.
+
+### Next.js
+
+```ts
+import { verifyLemonSqueezySignature, WebhookSignatureError } from "webhook-safe";
+
+export async function POST(request: Request) {
+  const rawBody = Buffer.from(await request.arrayBuffer());
+
+  try {
+    verifyLemonSqueezySignature(
+      rawBody,
+      request.headers.get("x-signature") ?? "",
+      { secret: process.env.LEMONSQUEEZY_WEBHOOK_SECRET! },
+    );
+  } catch (error) {
+    if (error instanceof WebhookSignatureError) {
+      return new Response("Invalid signature", { status: 401 });
+    }
+    throw error;
+  }
+
+  const event = JSON.parse(rawBody.toString("utf8")) as {
+    meta: { event_name: string };
+    data: { id: string };
+  };
+  return Response.json({ received: event.data.id, type: event.meta.event_name });
+}
+```
+
+`request.text()` matches `arrayBuffer()` for a UTF-8 JSON body. Use the buffer when you need the original bytes.
+
+### Options
+
+```ts
+interface LemonSqueezySignatureOptions {
+  secret: string;
+  previousSecrets?: readonly string[];
+}
+```
+
+- `secret` — signing secret configured on the webhook
+- `previousSecrets` — optional previous signing secrets, at most two
+
+There is no tolerance option. The provider signature does not include a timestamp.
+
+### Error handling
+
+A valid signature returns normally. `WebhookSignatureError` covers a missing header, a non-hex or wrong-length digest, a tampered body, and the wrong secret. The length is checked before `timingSafeEqual`, so a short header does not surface as `RangeError`. An empty secret or an invalid `previousSecrets` list throws `Error`.
+
+```ts
+import { WebhookSignatureError } from "webhook-safe";
+
+try {
+  verifyLemonSqueezySignature(rawBody, signatureHeader, {
+    secret: process.env.LEMONSQUEEZY_WEBHOOK_SECRET!,
+  });
+} catch (error) {
+  if (error instanceof WebhookSignatureError) {
+    // Reject the request.
+  } else {
+    throw error;
+  }
+}
+```
+
+### Secret format and rotation
+
+Lemon Squeezy asks you to choose the signing secret when you create the webhook. The docs describe it as any string you want, normally 6 to 40 characters. This function requires a nonempty string and does not enforce that usual length. The secret is the HMAC key as stored. It is not base64-decoded.
+
+The provider docs show one `X-Signature` value, not a list. When you change the secret on an existing webhook, pass the previous value in `previousSecrets` until deliveries signed with it have stopped, then remove it:
+
+```ts
+verifyLemonSqueezySignature(rawBody, signatureHeader, {
+  secret: currentSecret,
+  previousSecrets: [previousSecret],
+});
+```
+
+The library does not update the secret in Lemon Squeezy.
+
 ## Signing-secret rotation (0.8.0+)
 
 Signing-secret rotation is available in **0.8.0 and later**. Install a compatible
@@ -562,8 +1018,10 @@ const event = parseStripeWebhook(rawBody, stripeSignatureHeader, {
 });
 ```
 
-The same option is supported by Stripe, GitHub, Shopify and Slack verification
-and parsing helpers. Generic HMAC takes it as an optional fourth argument:
+Stripe, GitHub, Shopify and Slack verification and parsing helpers have accepted
+this option since 0.8.0. The unreleased Standard Webhooks, Paddle Billing and
+Lemon Squeezy verifiers accept it too. Generic HMAC takes it as an optional
+fourth argument:
 
 ```ts
 verifyHmacSignature(rawBody, signatureHeader, currentSecret, {
@@ -586,11 +1044,12 @@ stops accepting signatures made with it. The library does not change provider
 settings, store secrets, schedule expiration or decide an appropriate retention
 period. Never commit actual keys, log them or send them to a browser.
 
-Stripe/Slack timestamp tolerances still apply to every key; adding old keys does
-not permit stale deliveries. All other provider signature-format and raw-byte
-checks remain in force. Rotation does not add timestamp protection to providers
-that lack it. Use the same signed event/delivery identity for deduplication across
-both keys, rather than a signature or the key that accepted it.
+Stripe, Slack, Standard Webhooks and Paddle timestamp tolerances still apply to
+every key; adding old keys does not permit stale deliveries. Lemon Squeezy
+signatures have no timestamp, so rotation does not add replay protection there.
+All other provider signature-format and raw-byte checks remain in force. Use the
+same signed event or delivery identity for deduplication across both keys, rather
+than a signature or the key that accepted it.
 
 See [the processing example](examples/secret-rotation.ts). Webhook Safe Cloud's
 secret-management controls are separate; this library feature does not activate
@@ -813,6 +1272,12 @@ For Stripe, use the Stripe event `id` as the idempotency key and preserve the ra
 For GitHub, use the `X-GitHub-Delivery` value as the idempotency key and preserve the raw request payload used to generate the signature.
 
 For Shopify, use the Shopify webhook ID as the idempotency key and preserve the raw request payload used to generate the signature.
+
+For Standard Webhooks, use the `webhook-id` value as the idempotency key. The specification keeps that id stable across retries. Preserve the raw body covered by `webhook-signature`.
+
+For Paddle Billing, use the verified payload's `event_id` as the idempotency key. Paddle documents `event_id` as the event identity and `notification_id` as the delivery attempt. Preserve the raw body covered by `Paddle-Signature`.
+
+For Lemon Squeezy, derive the idempotency key from the verified JSON body. The documented order payload includes `meta.event_name` and `data.id`. `X-Event-Name` is not part of the HMAC.
 
 `webhook-safe` protects ownership of the webhook-processing claim and automatically renews that claim while your handler is running.
 
@@ -1088,6 +1553,84 @@ Returns `SlackWebhookEvent<T>`: a URL-verification challenge or an event callbac
 Throws for invalid signatures, malformed JSON or unsupported/invalid envelopes.
 See [Slack event parsing](#slack-event-parsing) for the result shape.
 
+### `verifyStandardWebhookSignature(payload, signatureHeader, options)`
+
+Verifies a Standard Webhooks v1 signature, including the same values from Svix's
+`svix-signature` header. Returns void. Throws `WebhookSignatureError` when the
+signature, id, timestamp or header is invalid.
+
+```ts
+verifyStandardWebhookSignature(rawBody, signatureHeader, {
+  secret: process.env.STANDARD_WEBHOOKS_SECRET!,
+  id: webhookId,
+  timestamp: webhookTimestamp,
+});
+```
+
+```ts
+interface StandardWebhookSignatureOptions {
+  secret: string;
+  id: string;
+  timestamp: string;
+  toleranceSeconds?: number;
+  now?: number;
+  previousSecrets?: readonly string[];
+}
+```
+
+`secret` is `whsec_` base64 or the unprefixed base64 key. `id` and `timestamp`
+are the message id and Unix seconds. `toleranceSeconds` defaults to 300 whole
+seconds in either direction. `now` is milliseconds. `previousSecrets` accepts up
+to two earlier secrets. See [Standard Webhooks](#standard-webhooks).
+
+### `verifyPaddleSignature(payload, signatureHeader, options)`
+
+Verifies a Paddle Billing `Paddle-Signature` header. Returns void. Throws
+`WebhookSignatureError` when the signature, timestamp or header is invalid.
+
+```ts
+verifyPaddleSignature(rawBody, paddleSignatureHeader, {
+  secret: process.env.PADDLE_WEBHOOK_SECRET!,
+});
+```
+
+```ts
+interface PaddleSignatureOptions {
+  secret: string;
+  toleranceSeconds?: number;
+  now?: number;
+  previousSecrets?: readonly string[];
+}
+```
+
+`secret` is the notification destination secret key string. `toleranceSeconds`
+defaults to 5. `now` is milliseconds. `previousSecrets` accepts up to two earlier
+keys. Multiple `h1` values are accepted when one matches. See
+[Paddle Billing](#paddle-billing).
+
+### `verifyLemonSqueezySignature(payload, signatureHeader, options)`
+
+Verifies a Lemon Squeezy `X-Signature` lowercase hex HMAC-SHA256 digest of the
+raw body. Returns void. Throws `WebhookSignatureError` when the signature is
+missing or does not match.
+
+```ts
+verifyLemonSqueezySignature(rawBody, signatureHeader, {
+  secret: process.env.LEMONSQUEEZY_WEBHOOK_SECRET!,
+});
+```
+
+```ts
+interface LemonSqueezySignatureOptions {
+  secret: string;
+  previousSecrets?: readonly string[];
+}
+```
+
+`secret` is the webhook signing secret. `previousSecrets` accepts up to two
+earlier secrets. There is no timestamp argument. See
+[Lemon Squeezy](#lemon-squeezy).
+
 ### `isWebhookEvent(value)`
 
 Runtime validation helper for the generic webhook event shape.
@@ -1214,6 +1757,30 @@ Webhook signatures should be verified before processing an event.
 
 `verifySlackSignature` checks Slack v0 signatures with a maximum five-minute timestamp window. `parseSlackWebhook` verifies before parsing Events API JSON; challenge responses do not enter the business-event queue.
 
+`verifyStandardWebhookSignature`:
+
+- verifies Standard Webhooks v1 HMAC-SHA256 over `id.timestamp.` plus the raw body
+- decodes `whsec_` base64 secrets before signing
+- accepts every space-separated `v1` signature, which is how senders rotate keys
+- compares the 32-byte digest with `timingSafeEqual` after a length check
+- rejects ids that contain `.`, malformed headers, and timestamps outside the whole-second tolerance
+- does not verify `v2a` asymmetric signatures
+
+`verifyPaddleSignature`:
+
+- verifies HMAC-SHA256 of `ts:` plus the raw body
+- accepts one or more lowercase `h1` digests in `Paddle-Signature`
+- compares hex digests with `timingSafeEqual` after a length check
+- rejects timestamps more than the configured skew away from `now` in either direction
+- uses the endpoint secret string as the HMAC key
+
+`verifyLemonSqueezySignature`:
+
+- verifies the lowercase hex HMAC-SHA256 of the raw body in `X-Signature`
+- compares the hex string with `timingSafeEqual` after a length check
+- rejects missing, short, non-hex and uppercase signatures
+- does not apply a timestamp window, because the provider signature has none
+
 Always use the exact raw request payload expected by your webhook provider when verifying signatures.
 All signature helpers accept a `string` or `Buffer`; pass the original `Buffer`
 when receiving HTTP bytes. Decoding bytes and encoding them again can change
@@ -1225,6 +1792,13 @@ Stripe timestamps must be unambiguous non-negative decimal integers; duplicate
 rejected. `now` must be finite and non-negative, and the signing secret must not
 be empty. Multiple `v1` candidates remain supported. Shopify expects canonical
 Base64 for its 32-byte SHA-256 digest, including the final `=` padding.
+
+Standard Webhooks timestamps use the same unambiguous decimal form. The tolerance
+is applied to whole seconds and defaults to 300. Paddle's `ts` uses that form
+too; its default tolerance is five seconds, measured in milliseconds, in both
+directions. Secrets for those schemes must be nonempty. A Standard Webhooks
+secret must also be canonical base64, with or without the `whsec_` prefix.
+Lemon Squeezy compares a 64-character lowercase hex digest and has no timestamp.
 
 
 ## Library or hosted service?

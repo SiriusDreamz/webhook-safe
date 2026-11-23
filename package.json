@@ -1,7 +1,7 @@
 {
   "name": "webhook-safe",
   "version": "0.9.0",
-  "description": "Webhook signature verification and idempotent processing for Node.js and TypeScript; Stripe, GitHub, Shopify, Slack, Redis and PostgreSQL",
+  "description": "Webhook signature verification and idempotent processing for Node.js and TypeScript; Stripe, GitHub, Shopify, Slack, Standard Webhooks, Paddle, Lemon Squeezy, Redis and PostgreSQL",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -49,6 +49,10 @@
     "distributed-systems",
     "slack",
     "slack-events-api",
+    "standard-webhooks",
+    "svix",
+    "paddle",
+    "lemonsqueezy",
     "signature-verification",
     "duplicate-events"
   ],
