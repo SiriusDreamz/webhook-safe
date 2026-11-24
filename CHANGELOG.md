@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+## 0.10.0 — 2026-11-24
+
+### Added
+
+- `verifyStandardWebhookSignature` and `StandardWebhookSignatureOptions` for
+  Standard Webhooks v1 signatures: HMAC-SHA256 over `id.timestamp.rawBody`,
+  `whsec_` base64 secrets, a default 300-second tolerance, and space-separated
+  signatures. `svix-id`, `svix-timestamp` and `svix-signature` use the same values.
+- `verifyPaddleSignature` and `PaddleSignatureOptions` for Paddle Billing
+  `Paddle-Signature` headers (`ts` and one or more `h1` values), HMAC-SHA256, and
+  a default five-second replay window in both directions.
+- `verifyLemonSqueezySignature` and `LemonSqueezySignatureOptions` for Lemon
+  Squeezy `X-Signature` lowercase hex HMAC-SHA256 digests of the raw body.
+- Timing-safe comparison, raw `Buffer` or string bodies, and the existing
+  `previousSecrets` overlap of up to two keys for all three verifiers.
+
+### Documentation
+
+- README usage, API and security sections for the three verifiers, including raw
+  body handling. Package description and keywords list them. Package version is
+  0.10.0 in package.json and both root version fields in package-lock.json.
+
+Release preparation only: requires an owner-approved v0.10.0 tag and publication.
+Published 0.9.0 does not export these verifiers. Stripe, GitHub, Shopify, Slack
+and generic HMAC verification are unchanged.
+
 ## 0.9.0 — 2026-11-18
 
 ### Added
