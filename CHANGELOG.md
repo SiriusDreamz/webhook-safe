@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.10.0 — 2026-11-24
+
 ### Added
 
 - `verifyStandardWebhookSignature` and `StandardWebhookSignatureOptions` for
@@ -19,12 +21,12 @@
 ### Documentation
 
 - README usage, API and security sections for the three verifiers, including raw
-  body handling. Package description and keywords list them. The package version
-  is unchanged.
+  body handling. Package description and keywords list them. Package version is
+  0.10.0 in package.json and both root version fields in package-lock.json.
 
-These verifiers are not in the published npm package until a release is prepared.
-This change does not publish a version. Stripe, GitHub, Shopify, Slack and generic
-HMAC verification are unchanged.
+Release preparation only: requires an owner-approved v0.10.0 tag and publication.
+Published 0.9.0 does not export these verifiers. Stripe, GitHub, Shopify, Slack
+and generic HMAC verification are unchanged.
 
 ## 0.9.0 — 2026-11-18
 

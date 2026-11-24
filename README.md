@@ -7,9 +7,8 @@ Lemon Squeezy and generic HMAC webhooks, then coordinate duplicate-event process
 with in-memory, Redis or PostgreSQL stores. The library is framework agnostic;
 preserve raw request bytes in your HTTP adapter.
 
-Standard Webhooks, Paddle Billing and Lemon Squeezy verification is included in
-this source tree and documented below. It is listed under Unreleased and is not
-exported by the published npm package until a release is prepared.
+Standard Webhooks, Paddle Billing and Lemon Squeezy verification is prepared for
+0.10.0 and documented below. Published 0.9.0 does not export these verifiers.
 
 For managed webhook delivery, retries and event inspection, visit
 [Webhook Safe Cloud](https://www.webhook-safe.com).
@@ -1019,7 +1018,7 @@ const event = parseStripeWebhook(rawBody, stripeSignatureHeader, {
 ```
 
 Stripe, GitHub, Shopify and Slack verification and parsing helpers have accepted
-this option since 0.8.0. The unreleased Standard Webhooks, Paddle Billing and
+this option since 0.8.0. The 0.10.0 Standard Webhooks, Paddle Billing and
 Lemon Squeezy verifiers accept it too. Generic HMAC takes it as an optional
 fourth argument:
 
