@@ -23,6 +23,8 @@
 - README usage, API and security sections for the three verifiers, including raw
   body handling. Package description and keywords list them. Package version is
   0.10.0 in package.json and both root version fields in package-lock.json.
+- Reorganize the README into a quick start, one section per provider, and a
+  shorter API reference. No runtime change.
 
 Release preparation only: requires an owner-approved v0.10.0 tag and publication.
 Published 0.9.0 does not export these verifiers. Stripe, GitHub, Shopify, Slack
